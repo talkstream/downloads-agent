@@ -114,7 +114,7 @@ categories:
     - rpm
   Other: []
 
-ignore_patterns:
+ignore_names:
   - .DS_Store
   - .localized
   - .Spotlight-V100

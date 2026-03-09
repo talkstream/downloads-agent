@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
 from downloads_agent.config import Config
-from downloads_agent.scanner import scan, FileInfo
+from downloads_agent.scanner import scan
 
 
 def test_scan_returns_only_inactive(populated_downloads: Config) -> None:

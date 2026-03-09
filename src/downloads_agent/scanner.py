@@ -55,11 +55,11 @@ def _get_dir_size(path: Path) -> int:
     return total
 
 
-def _should_ignore(name: str, is_dir: bool, config: Config) -> bool:
+def should_ignore(name: str, is_dir: bool, config: Config) -> bool:
     """Check if a file/dir should be ignored."""
     if name.startswith("."):
         return True
-    if name in config.ignore_patterns:
+    if name in config.ignore_names:
         return True
     if is_dir and name in config.ignore_dirs:
         return True
@@ -79,14 +79,17 @@ def scan(config: Config) -> list[FileInfo]:
         name = entry.name
         is_dir = entry.is_dir()
 
-        if _should_ignore(name, is_dir, config):
+        if should_ignore(name, is_dir, config):
             continue
         if entry.is_symlink():
             continue
 
+        # Get stat once to avoid TOCTOU and double syscall
+        stat_result = entry.stat()
+
         # Get last used date
         spotlight_date = _get_spotlight_last_used(entry)
-        mtime = datetime.fromtimestamp(entry.stat().st_mtime, tz=timezone.utc)
+        mtime = datetime.fromtimestamp(stat_result.st_mtime, tz=timezone.utc)
 
         if spotlight_date is not None:
             last_used = spotlight_date
@@ -102,7 +105,7 @@ def scan(config: Config) -> list[FileInfo]:
             size = _get_dir_size(entry)
             ext = ""
         else:
-            size = entry.stat().st_size
+            size = stat_result.st_size
             ext = entry.suffix.lstrip(".").lower()
 
         results.append(FileInfo(

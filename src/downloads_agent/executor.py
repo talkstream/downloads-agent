@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from downloads_agent import __version__
-from downloads_agent.planner import MovePlan
+from downloads_agent.planner import MovePlan, _resolve_collision
 
 LOCK_DIR = Path.home() / ".downloads-agent"
 LOCK_FILE = LOCK_DIR / "lock"
@@ -25,33 +26,38 @@ class ExecutionResult:
     log_path: Path
 
 
-def _acquire_lock() -> None:
-    """Create a lockfile to prevent parallel runs."""
+def acquire_lock() -> None:
+    """Create a lockfile atomically via O_CREAT | O_EXCL."""
     LOCK_DIR.mkdir(parents=True, exist_ok=True)
-    if LOCK_FILE.exists():
-        # Check if the process is still running
+    try:
+        fd = os.open(str(LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+    except FileExistsError:
         try:
             pid = int(LOCK_FILE.read_text().strip())
             os.kill(pid, 0)
-            raise RuntimeError(
-                f"Another downloads-agent is running (PID {pid}). "
-                f"Remove {LOCK_FILE} if this is stale."
-            )
-        except (ValueError, ProcessLookupError, PermissionError):
-            # Stale lockfile — remove it
-            LOCK_FILE.unlink()
-    LOCK_FILE.write_text(str(os.getpid()))
+        except ProcessLookupError:
+            # Process is dead — stale lockfile
+            LOCK_FILE.unlink(missing_ok=True)
+            return acquire_lock()
+        except (ValueError, PermissionError):
+            # ValueError: corrupt lockfile; PermissionError: process alive, different user
+            pass
+        raise RuntimeError(
+            f"Another downloads-agent is running (lockfile {LOCK_FILE}). "
+            f"Remove it manually if this is stale."
+        )
 
 
-def _release_lock() -> None:
+def release_lock() -> None:
     """Remove the lockfile."""
-    if LOCK_FILE.exists():
-        LOCK_FILE.unlink()
+    LOCK_FILE.unlink(missing_ok=True)
 
 
 def execute(plan: MovePlan) -> ExecutionResult:
     """Execute all move operations and write transaction log."""
-    _acquire_lock()
+    acquire_lock()
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now(timezone.utc)
@@ -75,11 +81,15 @@ def execute(plan: MovePlan) -> ExecutionResult:
                     log_entries.append(entry)
                     continue
 
-                # Create target parent directory
-                op.destination.parent.mkdir(parents=True, exist_ok=True)
+                # Re-check collision at execution time
+                dest = op.destination
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                if dest.exists():
+                    dest = _resolve_collision(dest)
+                    entry["destination"] = str(dest)
 
                 # Move
-                shutil.move(str(op.source), str(op.destination))
+                shutil.move(str(op.source), str(dest))
                 entry["status"] = "ok"
                 moved += 1
                 total_size += op.size
@@ -89,7 +99,7 @@ def execute(plan: MovePlan) -> ExecutionResult:
                 failed += 1
             log_entries.append(entry)
 
-        # Write transaction log
+        # Write transaction log atomically
         log_name = timestamp.strftime("%Y-%m-%d_%H%M%S") + ".json"
         log_path = LOG_DIR / log_name
         log_data = {
@@ -102,7 +112,15 @@ def execute(plan: MovePlan) -> ExecutionResult:
                 "total_size": total_size,
             },
         }
-        log_path.write_text(json.dumps(log_data, indent=2, ensure_ascii=False))
+
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=str(LOG_DIR), suffix=".tmp")
+        try:
+            with os.fdopen(tmp_fd, "w") as f:
+                json.dump(log_data, f, indent=2, ensure_ascii=False)
+            os.replace(tmp_path, str(log_path))
+        except BaseException:
+            os.unlink(tmp_path)
+            raise
 
         return ExecutionResult(
             moved=moved,
@@ -111,4 +129,4 @@ def execute(plan: MovePlan) -> ExecutionResult:
             log_path=log_path,
         )
     finally:
-        _release_lock()
+        release_lock()

@@ -2,45 +2,22 @@
 
 from __future__ import annotations
 
-import os
-from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
 from downloads_agent.config import Config
 from downloads_agent.planner import build_plan, format_plan, format_size, _resolve_collision
-from downloads_agent.scanner import FileInfo
 
-
-def _make_file_info(
-    path: Path,
-    ext: str = "pdf",
-    is_dir: bool = False,
-    size: int = 1024,
-    days_old: int = 60,
-) -> FileInfo:
-    """Helper to create FileInfo instances."""
-    now = datetime.now(timezone.utc)
-    mod_date = now - timedelta(days=days_old)
-    return FileInfo(
-        path=path,
-        name=path.name,
-        extension=ext,
-        size=size,
-        is_dir=is_dir,
-        last_used=mod_date,
-        modification_date=mod_date,
-    )
+from conftest import make_file_info
 
 
 def test_build_plan_categorizes_files(default_config: Config) -> None:
     """Files should be categorized correctly in the plan."""
     downloads = default_config.downloads_dir
     items = [
-        _make_file_info(downloads / "doc.pdf", "pdf"),
-        _make_file_info(downloads / "pic.jpg", "jpg"),
+        make_file_info(downloads / "doc.pdf", "pdf"),
+        make_file_info(downloads / "pic.jpg", "jpg"),
     ]
 
     plan = build_plan(items, default_config)
@@ -54,7 +31,7 @@ def test_build_plan_directories_go_to_folders(default_config: Config) -> None:
     """Directories should be placed in Folders/ category."""
     downloads = default_config.downloads_dir
     items = [
-        _make_file_info(downloads / "my_project", is_dir=True, ext=""),
+        make_file_info(downloads / "my_project", is_dir=True, ext=""),
     ]
 
     plan = build_plan(items, default_config)
@@ -68,7 +45,7 @@ def test_build_plan_directories_go_to_folders(default_config: Config) -> None:
 def test_build_plan_date_subfolder(default_config: Config) -> None:
     """Files should have YYYY-MM date subfolder in destination."""
     downloads = default_config.downloads_dir
-    items = [_make_file_info(downloads / "doc.pdf", "pdf", days_old=60)]
+    items = [make_file_info(downloads / "doc.pdf", "pdf", days_old=60)]
 
     plan = build_plan(items, default_config)
     dest = plan.operations[0].destination
@@ -81,7 +58,7 @@ def test_build_plan_no_date_subfolder(default_config: Config) -> None:
     """Without date_subfolder, files go directly into category."""
     default_config.date_subfolder = False
     downloads = default_config.downloads_dir
-    items = [_make_file_info(downloads / "doc.pdf", "pdf")]
+    items = [make_file_info(downloads / "doc.pdf", "pdf")]
 
     plan = build_plan(items, default_config)
     dest = plan.operations[0].destination
@@ -105,9 +82,9 @@ def test_build_plan_max_operations(default_config: Config) -> None:
     default_config.max_operations = 2
     downloads = default_config.downloads_dir
     items = [
-        _make_file_info(downloads / "a.pdf", "pdf"),
-        _make_file_info(downloads / "b.pdf", "pdf"),
-        _make_file_info(downloads / "c.pdf", "pdf"),
+        make_file_info(downloads / "a.pdf", "pdf"),
+        make_file_info(downloads / "b.pdf", "pdf"),
+        make_file_info(downloads / "c.pdf", "pdf"),
     ]
 
     with pytest.raises(ValueError, match="max_operations"):
@@ -127,9 +104,9 @@ def test_format_plan_output(default_config: Config) -> None:
     """format_plan should produce readable output."""
     downloads = default_config.downloads_dir
     items = [
-        _make_file_info(downloads / "doc.pdf", "pdf", size=1_048_576),
-        _make_file_info(downloads / "pic.jpg", "jpg", size=2_097_152),
-        _make_file_info(downloads / "old_dir", is_dir=True, ext="", size=5_000_000),
+        make_file_info(downloads / "doc.pdf", "pdf", size=1_048_576),
+        make_file_info(downloads / "pic.jpg", "jpg", size=2_097_152),
+        make_file_info(downloads / "old_dir", is_dir=True, ext="", size=5_000_000),
     ]
 
     plan = build_plan(items, default_config)

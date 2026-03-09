@@ -6,12 +6,16 @@ import subprocess
 
 
 def notify(message: str, title: str = "downloads-agent") -> None:
-    """Send a macOS notification."""
+    """Send a macOS notification (injection-proof via argv passing)."""
     try:
         subprocess.run(
             [
                 "osascript", "-e",
-                f'display notification "{message}" with title "{title}" sound name "Glass"',
+                "on run argv\n"
+                "display notification (item 1 of argv) "
+                'with title (item 2 of argv) sound name "Glass"\n'
+                "end run",
+                message, title,
             ],
             capture_output=True,
             timeout=5,

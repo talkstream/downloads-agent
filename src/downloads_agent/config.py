@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from importlib.resources import files, as_file
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 
-DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "default.yaml"
+_DEFAULT_CONFIG_REF = files("downloads_agent") / "data" / "default.yaml"
 USER_CONFIG_DIR = Path.home() / ".downloads-agent"
 USER_CONFIG_PATH = USER_CONFIG_DIR / "config.yaml"
 
@@ -22,7 +23,7 @@ class Config:
     max_operations: int
     date_subfolder: bool
     categories: dict[str, list[str]]
-    ignore_patterns: list[str]
+    ignore_names: list[str]
     ignore_dirs: list[str]
 
 
@@ -48,14 +49,20 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 def load_config(config_path: Path | None = None) -> Config:
     """Load config from default.yaml merged with optional user overrides."""
-    base = _load_yaml(DEFAULT_CONFIG_PATH)
+    with as_file(_DEFAULT_CONFIG_REF) as default_path:
+        base = _load_yaml(default_path)
 
     user_path = config_path or USER_CONFIG_PATH
     if user_path.exists():
         user = _load_yaml(user_path)
+        # Backward compat: rename old key before merge
+        if "ignore_patterns" in user and "ignore_names" not in user:
+            user["ignore_names"] = user.pop("ignore_patterns")
         merged = _deep_merge(base, user)
     else:
         merged = base
+
+    ignore_names = merged.get("ignore_names", merged.get("ignore_patterns", []))
 
     return Config(
         downloads_dir=_expand_path(merged["downloads_dir"]),
@@ -64,6 +71,6 @@ def load_config(config_path: Path | None = None) -> Config:
         max_operations=merged["max_operations"],
         date_subfolder=merged["date_subfolder"],
         categories=merged["categories"],
-        ignore_patterns=merged["ignore_patterns"],
+        ignore_names=ignore_names,
         ignore_dirs=merged["ignore_dirs"],
     )

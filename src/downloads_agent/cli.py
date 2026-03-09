@@ -20,7 +20,7 @@ def _cmd_scan(args: argparse.Namespace) -> None:
         print(f"Directory not found: {downloads}")
         sys.exit(1)
 
-    from downloads_agent.scanner import scan, _get_dir_size
+    from downloads_agent.scanner import scan, should_ignore, _get_dir_size
     from downloads_agent.classifier import classify
 
     # Count all items (including active)
@@ -29,16 +29,13 @@ def _cmd_scan(args: argparse.Namespace) -> None:
     total_size = 0
 
     for entry in downloads.iterdir():
-        if entry.name.startswith("."):
-            continue
-        if entry.name in config.ignore_patterns:
-            continue
-        if entry.is_dir() and entry.name in config.ignore_dirs:
-            continue
         if entry.is_symlink():
             continue
+        is_dir = entry.is_dir()
+        if should_ignore(entry.name, is_dir, config):
+            continue
 
-        if entry.is_dir():
+        if is_dir:
             total_dirs += 1
             total_size += _get_dir_size(entry)
         else:
@@ -120,14 +117,19 @@ def _cmd_run(args: argparse.Namespace) -> None:
     if not args.no_notify:
         notify(f"Moved {result.moved} items (~{format_size(result.total_size)}) to Archive/")
 
+    if result.failed:
+        sys.exit(1)
+
 
 def _cmd_undo(args: argparse.Namespace) -> None:
     """Undo a previous run."""
-    from downloads_agent.undo import undo, list_runs
+    from downloads_agent.undo import undo
+
+    config = load_config(args.config)
 
     try:
-        result = undo(args.run_id)
-    except FileNotFoundError as e:
+        result = undo(args.run_id, archive_dir=config.archive_dir)
+    except (FileNotFoundError, ValueError) as e:
         print(str(e))
         sys.exit(1)
 
@@ -135,6 +137,9 @@ def _cmd_undo(args: argparse.Namespace) -> None:
     print(f"  Restored: {result['restored']}")
     print(f"  Failed: {result['failed']}")
     print(f"  Skipped: {result['skipped']}")
+
+    if result["failed"]:
+        sys.exit(1)
 
 
 def _cmd_install(args: argparse.Namespace) -> None:
@@ -185,7 +190,6 @@ def main() -> None:
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--config", type=Path, default=None, help="Path to config file")
-    parser.add_argument("--verbose", action="store_true", help="Verbose output")
     parser.add_argument("--quiet", action="store_true", help="Errors only")
     parser.add_argument("--no-notify", action="store_true", help="Disable macOS notifications")
 

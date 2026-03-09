@@ -26,5 +26,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: Run tests
-        run: pytest tests/ -v --tb=short
+      - name: Lint
+        run: ruff check src/ tests/
+
+      - name: Test with coverage
+        run: pytest tests/ -v --tb=short --cov=downloads_agent --cov-report=term-missing
+
+      - name: Build wheel
+        run: pip wheel . --no-deps -w dist/
+
+      - name: Verify wheel installs
+        run: |
+          pip install dist/*.whl --force-reinstall
+          downloads-agent --version

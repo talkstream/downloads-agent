@@ -32,14 +32,19 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
+    "ruff>=0.4.0",
 ]
 
 [project.scripts]
 downloads-agent = "downloads_agent.cli:main"
+
+[tool.setuptools.package-data]
+downloads_agent = ["data/default.yaml"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["tests"]
 addopts = "-v"

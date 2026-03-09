@@ -25,6 +25,17 @@ def _create_log(log_dir: Path, name: str, operations: list[dict]) -> Path:
     return log_path
 
 
+def _patch_undo(tmp_path: Path):
+    """Patch LOG_DIR and lock for undo tests."""
+    log_dir = tmp_path / "logs"
+    lock_dir = tmp_path / "lock_dir"
+    return (
+        patch("downloads_agent.undo.LOG_DIR", log_dir),
+        patch("downloads_agent.executor.LOCK_DIR", lock_dir),
+        patch("downloads_agent.executor.LOCK_FILE", lock_dir / "lock"),
+    )
+
+
 def test_undo_restores_files(tmp_path: Path) -> None:
     """Undo should move files back to their original locations."""
     # Setup: create "archived" file
@@ -40,7 +51,8 @@ def test_undo_restores_files(tmp_path: Path) -> None:
 
     src.parent.mkdir(parents=True, exist_ok=True)
 
-    with patch("downloads_agent.undo.LOG_DIR", log_dir):
+    p1, p2, p3 = _patch_undo(tmp_path)
+    with p1, p2, p3:
         result = undo()
 
     assert result["restored"] == 1
@@ -62,7 +74,8 @@ def test_undo_specific_run(tmp_path: Path) -> None:
 
     src.parent.mkdir(parents=True, exist_ok=True)
 
-    with patch("downloads_agent.undo.LOG_DIR", log_dir):
+    p1, p2, p3 = _patch_undo(tmp_path)
+    with p1, p2, p3:
         result = undo("2026-01-15_100000")
 
     assert result["restored"] == 1
@@ -76,7 +89,8 @@ def test_undo_skips_errors(tmp_path: Path) -> None:
         {"source": "/no/such", "destination": "/no/dst", "size": 0, "is_dir": False, "status": "error"},
     ])
 
-    with patch("downloads_agent.undo.LOG_DIR", log_dir):
+    p1, p2, p3 = _patch_undo(tmp_path)
+    with p1, p2, p3:
         result = undo()
 
     assert result["skipped"] == 1
@@ -88,7 +102,8 @@ def test_undo_missing_log(tmp_path: Path) -> None:
     log_dir = tmp_path / "logs"
     log_dir.mkdir(parents=True)
 
-    with patch("downloads_agent.undo.LOG_DIR", log_dir):
+    p1, p2, p3 = _patch_undo(tmp_path)
+    with p1, p2, p3:
         with pytest.raises(FileNotFoundError):
             undo()
 
@@ -108,7 +123,8 @@ def test_undo_cleans_empty_dirs(tmp_path: Path) -> None:
 
     src.parent.mkdir(parents=True, exist_ok=True)
 
-    with patch("downloads_agent.undo.LOG_DIR", log_dir):
+    p1, p2, p3 = _patch_undo(tmp_path)
+    with p1, p2, p3:
         undo()
 
     # Empty archive dirs should be cleaned up
@@ -126,3 +142,60 @@ def test_list_runs(tmp_path: Path) -> None:
 
     assert len(runs) == 2
     assert runs[0].stem == "2026-01-08_090000"
+
+
+def test_undo_invalid_run_id(tmp_path: Path) -> None:
+    """Undo should reject run_id with path traversal."""
+    p1, p2, p3 = _patch_undo(tmp_path)
+    with p1, p2, p3:
+        with pytest.raises(ValueError, match="Invalid run ID format"):
+            undo("../../../etc/passwd")
+
+
+def test_undo_invalid_run_id_special_chars(tmp_path: Path) -> None:
+    """Undo should reject run_id with special characters."""
+    p1, p2, p3 = _patch_undo(tmp_path)
+    with p1, p2, p3:
+        with pytest.raises(ValueError, match="Invalid run ID format"):
+            undo("foo; rm -rf /")
+
+
+def test_cleanup_empty_dirs_respects_stop_at(tmp_path: Path) -> None:
+    """_cleanup_empty_dirs should not remove the stop_at directory."""
+    archive = tmp_path / "Archive"
+    deep_dir = archive / "Documents" / "2026-01"
+    deep_dir.mkdir(parents=True)
+
+    _cleanup_empty_dirs({deep_dir}, stop_at=archive)
+
+    # Archive itself should still exist
+    assert archive.exists()
+    # But inner empty dirs should be removed
+    assert not (archive / "Documents" / "2026-01").exists()
+    assert not (archive / "Documents").exists()
+
+
+def test_undo_with_lockfile(tmp_path: Path) -> None:
+    """Undo should acquire and release lockfile properly."""
+    src = tmp_path / "Downloads" / "doc.pdf"
+    dst = tmp_path / "Archive" / "Documents" / "doc.pdf"
+    dst.parent.mkdir(parents=True)
+    dst.write_text("content")
+
+    log_dir = tmp_path / "logs"
+    _create_log(log_dir, "2026-01-01_090000", [
+        {"source": str(src), "destination": str(dst), "size": 7, "is_dir": False, "status": "ok"},
+    ])
+
+    src.parent.mkdir(parents=True, exist_ok=True)
+
+    lock_dir = tmp_path / "lock_dir"
+    lock_file = lock_dir / "lock"
+    with patch("downloads_agent.undo.LOG_DIR", log_dir), \
+         patch("downloads_agent.executor.LOCK_DIR", lock_dir), \
+         patch("downloads_agent.executor.LOCK_FILE", lock_file):
+        result = undo()
+
+    assert result["restored"] == 1
+    # Lock should be released
+    assert not lock_file.exists()

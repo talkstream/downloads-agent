@@ -98,9 +98,9 @@ categories:
     - pdf
     - docx
     - txt
-    # ... see config/default.yaml for full list
+    # ... see src/downloads_agent/data/default.yaml for full list
 
-ignore_patterns:
+ignore_names:
   - .DS_Store
   - .localized
 
@@ -113,7 +113,6 @@ ignore_dirs:
 | Flag | Description |
 |------|-------------|
 | `--config PATH` | Path to config file |
-| `--verbose` | Verbose output |
 | `--quiet` | Errors only |
 | `--no-notify` | Disable macOS notifications |
 
@@ -134,7 +133,7 @@ Stored at `~/.downloads-agent/logs/YYYY-MM-DD_HHMMSS.json`:
   "timestamp": "2026-03-09T09:00:00+00:00",
   "version": "0.1.0",
   "operations": [
-    {"source": "/path/from", "destination": "/path/to", "size": 12345, "status": "ok"}
+    {"source": "/path/from", "destination": "/path/to", "size": 12345, "is_dir": false, "status": "ok"}
   ],
   "summary": {"files_moved": 42, "total_size": 1073741824}
 }

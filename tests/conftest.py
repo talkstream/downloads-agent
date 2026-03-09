@@ -9,6 +9,34 @@ from pathlib import Path
 import pytest
 
 from downloads_agent.config import Config
+from downloads_agent.scanner import FileInfo
+
+
+def make_file_info(
+    path: Path,
+    ext: str = "pdf",
+    is_dir: bool = False,
+    size: int = 1024,
+    days_old: int = 60,
+) -> FileInfo:
+    """Shared helper to create FileInfo instances for tests."""
+    now = datetime.now(timezone.utc)
+    mod_date = now - timedelta(days=days_old)
+    return FileInfo(
+        path=path,
+        name=path.name,
+        extension=ext,
+        size=size,
+        is_dir=is_dir,
+        last_used=mod_date,
+        modification_date=mod_date,
+    )
+
+
+@pytest.fixture
+def file_info_factory():
+    """Fixture providing make_file_info helper."""
+    return make_file_info
 
 
 @pytest.fixture
@@ -33,7 +61,7 @@ def default_config(tmp_path: Path) -> Config:
             "Archives": ["zip", "tar", "gz", "dmg"],
             "Other": [],
         },
-        ignore_patterns=[".DS_Store", ".localized"],
+        ignore_names=[".DS_Store", ".localized"],
         ignore_dirs=["Archive"],
     )
 

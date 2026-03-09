@@ -3,37 +3,14 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone, timedelta
-from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 
 from downloads_agent.config import Config
-from downloads_agent.planner import build_plan, MovePlan, MoveOperation
-from downloads_agent.scanner import FileInfo
-from downloads_agent.executor import execute, LOCK_FILE
+from downloads_agent.planner import build_plan
+from downloads_agent.executor import execute
 
-
-def _make_file_info(
-    path: Path,
-    ext: str = "pdf",
-    is_dir: bool = False,
-    size: int = 1024,
-    days_old: int = 60,
-) -> FileInfo:
-    """Helper to create FileInfo instances."""
-    now = datetime.now(timezone.utc)
-    mod_date = now - timedelta(days=days_old)
-    return FileInfo(
-        path=path,
-        name=path.name,
-        extension=ext,
-        size=size,
-        is_dir=is_dir,
-        last_used=mod_date,
-        modification_date=mod_date,
-    )
+from conftest import make_file_info
 
 
 def test_execute_moves_files(default_config: Config) -> None:
@@ -42,7 +19,7 @@ def test_execute_moves_files(default_config: Config) -> None:
     f = downloads / "doc.pdf"
     f.write_text("test content")
 
-    items = [_make_file_info(f, "pdf", size=len("test content"))]
+    items = [make_file_info(f, "pdf", size=len("test content"))]
     plan = build_plan(items, default_config)
 
     with patch("downloads_agent.executor.LOCK_DIR", downloads / ".lock_dir"), \
@@ -62,7 +39,7 @@ def test_execute_writes_transaction_log(default_config: Config) -> None:
     f = downloads / "doc.pdf"
     f.write_text("test")
 
-    items = [_make_file_info(f, "pdf", size=4)]
+    items = [make_file_info(f, "pdf", size=4)]
     plan = build_plan(items, default_config)
 
     lock_dir = downloads / ".lock_dir"
@@ -84,7 +61,7 @@ def test_execute_creates_directories(default_config: Config) -> None:
     f = downloads / "doc.pdf"
     f.write_text("test")
 
-    items = [_make_file_info(f, "pdf", size=4)]
+    items = [make_file_info(f, "pdf", size=4)]
     plan = build_plan(items, default_config)
 
     lock_dir = downloads / ".lock_dir"
@@ -103,7 +80,7 @@ def test_execute_moves_directories(default_config: Config) -> None:
     d.mkdir()
     (d / "inner.txt").write_text("inner")
 
-    items = [_make_file_info(d, "", is_dir=True, size=5)]
+    items = [make_file_info(d, "", is_dir=True, size=5)]
     plan = build_plan(items, default_config)
 
     lock_dir = downloads / ".lock_dir"
@@ -125,7 +102,7 @@ def test_execute_lockfile_cleanup(default_config: Config) -> None:
     f = downloads / "doc.pdf"
     f.write_text("test")
 
-    items = [_make_file_info(f, "pdf", size=4)]
+    items = [make_file_info(f, "pdf", size=4)]
     plan = build_plan(items, default_config)
 
     lock_dir = downloads / ".lock_dir"
@@ -136,3 +113,33 @@ def test_execute_lockfile_cleanup(default_config: Config) -> None:
         execute(plan)
 
     assert not lock_file.exists()
+
+
+def test_execute_collision_at_execution_time(default_config: Config) -> None:
+    """If target file was created between plan and execute, collision should be resolved."""
+    downloads = default_config.downloads_dir
+    f = downloads / "doc.pdf"
+    f.write_text("test content")
+
+    items = [make_file_info(f, "pdf", size=len("test content"))]
+    plan = build_plan(items, default_config)
+
+    # Create the target file before execution (simulates race condition)
+    dest = plan.operations[0].destination
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text("already exists")
+
+    lock_dir = downloads / ".lock_dir"
+    with patch("downloads_agent.executor.LOCK_DIR", lock_dir), \
+         patch("downloads_agent.executor.LOCK_FILE", lock_dir / "lock"), \
+         patch("downloads_agent.executor.LOG_DIR", lock_dir / "logs"):
+        result = execute(plan)
+
+    assert result.moved == 1
+    assert not f.exists()
+    # Original destination should still have old content
+    assert dest.read_text() == "already exists"
+    # New file should be at _1 suffix path
+    collision_dest = dest.parent / f"{dest.stem}_1{dest.suffix}"
+    assert collision_dest.exists()
+    assert collision_dest.read_text() == "test content"

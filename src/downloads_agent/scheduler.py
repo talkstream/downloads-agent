@@ -52,7 +52,7 @@ def install() -> str:
     lines = [line for line in current.splitlines() if CRON_MARKER not in line]
 
     agent_cmd = _get_agent_path()
-    cron_line = f"0 9 * * 0 {agent_cmd} run --execute --quiet 2>&1 >> {LOG_PATH} {CRON_MARKER}"
+    cron_line = f'0 9 * * 0 {agent_cmd} run --execute --quiet >> "{LOG_PATH}" 2>&1 {CRON_MARKER}'
     lines.append(cron_line)
 
     # Ensure trailing newline
