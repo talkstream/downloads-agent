@@ -29,6 +29,9 @@ jobs:
       - name: Lint
         run: ruff check src/ tests/
 
+      - name: Type check
+        run: mypy src/
+
       - name: Test with coverage
         run: pytest tests/ -v --tb=short --cov=downloads_agent --cov-report=term-missing
 

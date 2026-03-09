@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 
 from downloads_agent.config import Config
-from downloads_agent.planner import build_plan, format_plan, format_size, _resolve_collision
+from downloads_agent.errors import DownloadsAgentError
+from downloads_agent.planner import build_plan, format_plan, format_size, resolve_collision
 
 from conftest import make_file_info
 
@@ -65,16 +66,16 @@ def test_build_plan_no_date_subfolder(default_config: Config) -> None:
     assert dest == default_config.archive_dir / "Documents" / "doc.pdf"
 
 
-def test_resolve_collision(tmp_path: Path) -> None:
+def testresolve_collision(tmp_path: Path) -> None:
     """Collision resolution should add _1, _2 suffixes."""
     target = tmp_path / "file.pdf"
-    assert _resolve_collision(target) == target
+    assert resolve_collision(target) == target
 
     target.touch()
-    assert _resolve_collision(target) == tmp_path / "file_1.pdf"
+    assert resolve_collision(target) == tmp_path / "file_1.pdf"
 
     (tmp_path / "file_1.pdf").touch()
-    assert _resolve_collision(target) == tmp_path / "file_2.pdf"
+    assert resolve_collision(target) == tmp_path / "file_2.pdf"
 
 
 def test_build_plan_max_operations(default_config: Config) -> None:
@@ -87,7 +88,7 @@ def test_build_plan_max_operations(default_config: Config) -> None:
         make_file_info(downloads / "c.pdf", "pdf"),
     ]
 
-    with pytest.raises(ValueError, match="max_operations"):
+    with pytest.raises(DownloadsAgentError, match="max_operations"):
         build_plan(items, default_config, check_max=True)
 
 

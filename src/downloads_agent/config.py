@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from importlib.resources import files, as_file
 from pathlib import Path
@@ -9,10 +10,19 @@ from typing import Any
 
 import yaml
 
+from downloads_agent.errors import ConfigError
+
 
 _DEFAULT_CONFIG_REF = files("downloads_agent") / "data" / "default.yaml"
 USER_CONFIG_DIR = Path.home() / ".downloads-agent"
 USER_CONFIG_PATH = USER_CONFIG_DIR / "config.yaml"
+
+
+_KNOWN_CONFIG_KEYS = frozenset({
+    "downloads_dir", "archive_dir", "inactive_days", "max_operations",
+    "date_subfolder", "categories", "ignore_names", "ignore_dirs",
+    "ignore_patterns",  # backward compat alias
+})
 
 
 @dataclass
@@ -25,6 +35,22 @@ class Config:
     categories: dict[str, list[str]]
     ignore_names: list[str]
     ignore_dirs: list[str]
+
+    def __post_init__(self) -> None:
+        if self.inactive_days < 1:
+            raise ConfigError(
+                f"inactive_days must be >= 1, got {self.inactive_days}"
+            )
+        if self.max_operations < 1:
+            raise ConfigError(
+                f"max_operations must be >= 1, got {self.max_operations}"
+            )
+        if self.downloads_dir.resolve() == self.archive_dir.resolve():
+            raise ConfigError(
+                "downloads_dir and archive_dir must be different directories"
+            )
+        if not self.categories:
+            raise ConfigError("categories must not be empty")
 
 
 def _expand_path(p: str) -> Path:
@@ -59,6 +85,10 @@ def load_config(config_path: Path | None = None) -> Config:
         if "ignore_patterns" in user and "ignore_names" not in user:
             user["ignore_names"] = user.pop("ignore_patterns")
         merged = _deep_merge(base, user)
+        # Warn about unknown config keys
+        for key in user:
+            if key not in _KNOWN_CONFIG_KEYS:
+                print(f"warning: unknown config key '{key}', ignored", file=sys.stderr)
     else:
         merged = base
 

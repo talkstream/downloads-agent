@@ -1,5 +1,7 @@
 # downloads-agent
 
+> **macOS only** — requires Spotlight (`mdls`), `osascript`, and `crontab`.
+
 Automated Downloads organizer for macOS. Moves inactive files from `~/Downloads` to a structured `Archive/` directory, categorized by file type and date.
 
 ## Features
@@ -115,6 +117,14 @@ ignore_dirs:
 | `--config PATH` | Path to config file |
 | `--quiet` | Errors only |
 | `--no-notify` | Disable macOS notifications |
+
+## System Requirements
+
+- **macOS** (tested on Ventura+)
+- **Python 3.11+**
+- **Spotlight** (`mdls`) — used for `kMDItemLastUsedDate` to detect when files were last opened
+- **osascript** — used for native macOS notifications
+- **crontab** — used for optional weekly scheduling
 
 ## How It Works
 

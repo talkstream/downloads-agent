@@ -3,9 +3,23 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
+
+from downloads_agent.errors import DownloadsAgentError
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class UndoResult:
+    log_file: str
+    restored: int
+    failed: int
+    skipped: int
 
 LOG_DIR = Path.home() / ".downloads-agent" / "logs"
 
@@ -19,28 +33,28 @@ def list_runs() -> list[Path]:
     return [p for p in logs if p.stem not in ("cron",)]
 
 
-def undo(run_id: str | None = None, archive_dir: Path | None = None) -> dict:
+def undo(run_id: str | None = None, archive_dir: Path | None = None) -> UndoResult:
     """Undo a specific run or the latest one.
 
     Args:
         run_id: Transaction log ID (YYYY-MM-DD_HHMMSS format).
         archive_dir: Root archive directory (used as ceiling for empty dir cleanup).
 
-    Returns a summary dict with restored/failed/skipped counts.
+    Returns an UndoResult with restored/failed/skipped counts.
     """
     from downloads_agent.executor import acquire_lock, release_lock
 
     if run_id:
         # Sanitize: only allow YYYY-MM-DD_HHMMSS format
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{6}", run_id):
-            raise ValueError(f"Invalid run ID format: {run_id}")
+            raise DownloadsAgentError(f"Invalid run ID format: {run_id}")
         log_path = LOG_DIR / f"{run_id}.json"
         if not log_path.exists():
-            raise FileNotFoundError(f"Transaction log not found: {log_path}")
+            raise DownloadsAgentError(f"Transaction log not found: {log_path}")
     else:
         runs = list_runs()
         if not runs:
-            raise FileNotFoundError("No transaction logs found.")
+            raise DownloadsAgentError("No transaction logs found.")
         log_path = runs[0]
 
     with open(log_path) as f:
@@ -74,6 +88,7 @@ def undo(run_id: str | None = None, archive_dir: Path | None = None) -> dict:
                 # Track parent directories for cleanup
                 empty_dirs.add(src.parent)
             except Exception:
+                logger.warning("Failed to undo %s → %s", src, dst, exc_info=True)
                 failed += 1
 
         # Clean up empty directories created by archiving
@@ -81,12 +96,12 @@ def undo(run_id: str | None = None, archive_dir: Path | None = None) -> dict:
     finally:
         release_lock()
 
-    return {
-        "log_file": log_path.name,
-        "restored": restored,
-        "failed": failed,
-        "skipped": skipped,
-    }
+    return UndoResult(
+        log_file=log_path.name,
+        restored=restored,
+        failed=failed,
+        skipped=skipped,
+    )
 
 
 def _cleanup_empty_dirs(dirs: set[Path], stop_at: Path | None = None) -> None:

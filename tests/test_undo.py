@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
+from downloads_agent.errors import DownloadsAgentError
 from downloads_agent.undo import undo, list_runs, _cleanup_empty_dirs
 
 
@@ -55,7 +56,7 @@ def test_undo_restores_files(tmp_path: Path) -> None:
     with p1, p2, p3:
         result = undo()
 
-    assert result["restored"] == 1
+    assert result.restored == 1
     assert src.exists()
     assert src.read_text() == "content"
 
@@ -78,8 +79,8 @@ def test_undo_specific_run(tmp_path: Path) -> None:
     with p1, p2, p3:
         result = undo("2026-01-15_100000")
 
-    assert result["restored"] == 1
-    assert result["log_file"] == "2026-01-15_100000.json"
+    assert result.restored == 1
+    assert result.log_file == "2026-01-15_100000.json"
 
 
 def test_undo_skips_errors(tmp_path: Path) -> None:
@@ -93,8 +94,8 @@ def test_undo_skips_errors(tmp_path: Path) -> None:
     with p1, p2, p3:
         result = undo()
 
-    assert result["skipped"] == 1
-    assert result["restored"] == 0
+    assert result.skipped == 1
+    assert result.restored == 0
 
 
 def test_undo_missing_log(tmp_path: Path) -> None:
@@ -104,7 +105,7 @@ def test_undo_missing_log(tmp_path: Path) -> None:
 
     p1, p2, p3 = _patch_undo(tmp_path)
     with p1, p2, p3:
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(DownloadsAgentError, match="No transaction logs found"):
             undo()
 
 
@@ -148,7 +149,7 @@ def test_undo_invalid_run_id(tmp_path: Path) -> None:
     """Undo should reject run_id with path traversal."""
     p1, p2, p3 = _patch_undo(tmp_path)
     with p1, p2, p3:
-        with pytest.raises(ValueError, match="Invalid run ID format"):
+        with pytest.raises(DownloadsAgentError, match="Invalid run ID format"):
             undo("../../../etc/passwd")
 
 
@@ -156,7 +157,7 @@ def test_undo_invalid_run_id_special_chars(tmp_path: Path) -> None:
     """Undo should reject run_id with special characters."""
     p1, p2, p3 = _patch_undo(tmp_path)
     with p1, p2, p3:
-        with pytest.raises(ValueError, match="Invalid run ID format"):
+        with pytest.raises(DownloadsAgentError, match="Invalid run ID format"):
             undo("foo; rm -rf /")
 
 
@@ -196,6 +197,54 @@ def test_undo_with_lockfile(tmp_path: Path) -> None:
          patch("downloads_agent.executor.LOCK_FILE", lock_file):
         result = undo()
 
-    assert result["restored"] == 1
+    assert result.restored == 1
     # Lock should be released
     assert not lock_file.exists()
+
+
+def test_undo_malformed_json_log(tmp_path: Path) -> None:
+    """Malformed JSON log should raise a clear error, not json.JSONDecodeError."""
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir(parents=True)
+    log_path = log_dir / "2026-01-01_090000.json"
+    log_path.write_text("{invalid json!!!")
+
+    p1, p2, p3 = _patch_undo(tmp_path)
+    with p1, p2, p3:
+        with pytest.raises(Exception):
+            undo("2026-01-01_090000")
+
+
+def test_undo_missing_operations_key(tmp_path: Path) -> None:
+    """Log without 'operations' key should raise a clear error."""
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir(parents=True)
+    log_path = log_dir / "2026-01-01_090000.json"
+    log_path.write_text(json.dumps({"timestamp": "2026-01-01T00:00:00"}))
+
+    p1, p2, p3 = _patch_undo(tmp_path)
+    with p1, p2, p3:
+        with pytest.raises(Exception):
+            undo("2026-01-01_090000")
+
+
+def test_undo_destination_already_deleted(tmp_path: Path) -> None:
+    """Undo when archived file no longer exists should skip correctly."""
+    src = tmp_path / "Downloads" / "doc.pdf"
+    # Destination does NOT exist — file was already deleted
+    dst = tmp_path / "Archive" / "Documents" / "doc.pdf"
+
+    log_dir = tmp_path / "logs"
+    _create_log(log_dir, "2026-01-01_090000", [
+        {"source": str(src), "destination": str(dst), "size": 7, "is_dir": False, "status": "ok"},
+    ])
+
+    src.parent.mkdir(parents=True, exist_ok=True)
+
+    p1, p2, p3 = _patch_undo(tmp_path)
+    with p1, p2, p3:
+        result = undo()
+
+    assert result.skipped == 1
+    assert result.restored == 0
+    assert result.failed == 0

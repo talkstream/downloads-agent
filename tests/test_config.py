@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 from downloads_agent.config import load_config, _deep_merge, Config
+from downloads_agent.errors import ConfigError
 
 
 def test_load_config_defaults() -> None:
@@ -82,3 +84,76 @@ def test_load_config_ignore_names_backward_compat(tmp_path: Path) -> None:
     config = load_config(config_path=user_config)
     assert ".DS_Store" in config.ignore_names
     assert ".custom" in config.ignore_names
+
+
+def test_config_negative_inactive_days() -> None:
+    """negative inactive_days should raise ConfigError."""
+    with pytest.raises(ConfigError, match="inactive_days must be >= 1"):
+        Config(
+            downloads_dir=Path("/tmp/dl"),
+            archive_dir=Path("/tmp/dl/Archive"),
+            inactive_days=-1,
+            max_operations=500,
+            date_subfolder=True,
+            categories={"Documents": ["pdf"]},
+            ignore_names=[],
+            ignore_dirs=[],
+        )
+
+
+def test_config_zero_max_operations() -> None:
+    """zero max_operations should raise ConfigError."""
+    with pytest.raises(ConfigError, match="max_operations must be >= 1"):
+        Config(
+            downloads_dir=Path("/tmp/dl"),
+            archive_dir=Path("/tmp/dl/Archive"),
+            inactive_days=30,
+            max_operations=0,
+            date_subfolder=True,
+            categories={"Documents": ["pdf"]},
+            ignore_names=[],
+            ignore_dirs=[],
+        )
+
+
+def test_config_same_downloads_and_archive_dir() -> None:
+    """downloads_dir == archive_dir should raise ConfigError."""
+    with pytest.raises(ConfigError, match="must be different"):
+        Config(
+            downloads_dir=Path("/tmp/dl"),
+            archive_dir=Path("/tmp/dl"),
+            inactive_days=30,
+            max_operations=500,
+            date_subfolder=True,
+            categories={"Documents": ["pdf"]},
+            ignore_names=[],
+            ignore_dirs=[],
+        )
+
+
+def test_config_empty_categories() -> None:
+    """empty categories should raise ConfigError."""
+    with pytest.raises(ConfigError, match="categories must not be empty"):
+        Config(
+            downloads_dir=Path("/tmp/dl"),
+            archive_dir=Path("/tmp/dl/Archive"),
+            inactive_days=30,
+            max_operations=500,
+            date_subfolder=True,
+            categories={},
+            ignore_names=[],
+            ignore_dirs=[],
+        )
+
+
+def test_config_unknown_key_warning(tmp_path: Path, capsys) -> None:
+    """Unknown config keys should produce a warning in stderr."""
+    user_config = tmp_path / "config.yaml"
+    user_config.write_text(yaml.dump({
+        "inactive_days": 14,
+        "some_unknown_key": "value",
+    }))
+
+    load_config(config_path=user_config)
+    captured = capsys.readouterr()
+    assert "unknown config key 'some_unknown_key'" in captured.err

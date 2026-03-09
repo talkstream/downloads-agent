@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import patch
 
 
@@ -11,6 +12,16 @@ from downloads_agent.planner import build_plan
 from downloads_agent.executor import execute
 
 from conftest import make_file_info
+
+
+def _patch_executor(tmp_path: Path):
+    """Patch LOCK_DIR, LOCK_FILE, and LOG_DIR for executor tests."""
+    lock_dir = tmp_path / ".lock_dir"
+    return (
+        patch("downloads_agent.executor.LOCK_DIR", lock_dir),
+        patch("downloads_agent.executor.LOCK_FILE", lock_dir / "lock"),
+        patch("downloads_agent.executor.LOG_DIR", lock_dir / "logs"),
+    )
 
 
 def test_execute_moves_files(default_config: Config) -> None:
@@ -22,9 +33,8 @@ def test_execute_moves_files(default_config: Config) -> None:
     items = [make_file_info(f, "pdf", size=len("test content"))]
     plan = build_plan(items, default_config)
 
-    with patch("downloads_agent.executor.LOCK_DIR", downloads / ".lock_dir"), \
-         patch("downloads_agent.executor.LOCK_FILE", downloads / ".lock_dir" / "lock"), \
-         patch("downloads_agent.executor.LOG_DIR", downloads / ".lock_dir" / "logs"):
+    p1, p2, p3 = _patch_executor(downloads)
+    with p1, p2, p3:
         result = execute(plan)
 
     assert result.moved == 1
@@ -42,10 +52,8 @@ def test_execute_writes_transaction_log(default_config: Config) -> None:
     items = [make_file_info(f, "pdf", size=4)]
     plan = build_plan(items, default_config)
 
-    lock_dir = downloads / ".lock_dir"
-    with patch("downloads_agent.executor.LOCK_DIR", lock_dir), \
-         patch("downloads_agent.executor.LOCK_FILE", lock_dir / "lock"), \
-         patch("downloads_agent.executor.LOG_DIR", lock_dir / "logs"):
+    p1, p2, p3 = _patch_executor(downloads)
+    with p1, p2, p3:
         result = execute(plan)
 
     log_data = json.loads(result.log_path.read_text())
@@ -64,10 +72,8 @@ def test_execute_creates_directories(default_config: Config) -> None:
     items = [make_file_info(f, "pdf", size=4)]
     plan = build_plan(items, default_config)
 
-    lock_dir = downloads / ".lock_dir"
-    with patch("downloads_agent.executor.LOCK_DIR", lock_dir), \
-         patch("downloads_agent.executor.LOCK_FILE", lock_dir / "lock"), \
-         patch("downloads_agent.executor.LOG_DIR", lock_dir / "logs"):
+    p1, p2, p3 = _patch_executor(downloads)
+    with p1, p2, p3:
         execute(plan)
 
     assert default_config.archive_dir.exists()
@@ -83,10 +89,8 @@ def test_execute_moves_directories(default_config: Config) -> None:
     items = [make_file_info(d, "", is_dir=True, size=5)]
     plan = build_plan(items, default_config)
 
-    lock_dir = downloads / ".lock_dir"
-    with patch("downloads_agent.executor.LOCK_DIR", lock_dir), \
-         patch("downloads_agent.executor.LOCK_FILE", lock_dir / "lock"), \
-         patch("downloads_agent.executor.LOG_DIR", lock_dir / "logs"):
+    p1, p2, p3 = _patch_executor(downloads)
+    with p1, p2, p3:
         result = execute(plan)
 
     assert result.moved == 1
@@ -107,9 +111,8 @@ def test_execute_lockfile_cleanup(default_config: Config) -> None:
 
     lock_dir = downloads / ".lock_dir"
     lock_file = lock_dir / "lock"
-    with patch("downloads_agent.executor.LOCK_DIR", lock_dir), \
-         patch("downloads_agent.executor.LOCK_FILE", lock_file), \
-         patch("downloads_agent.executor.LOG_DIR", lock_dir / "logs"):
+    p1, p2, p3 = _patch_executor(downloads)
+    with p1, p2, p3:
         execute(plan)
 
     assert not lock_file.exists()
@@ -129,10 +132,8 @@ def test_execute_collision_at_execution_time(default_config: Config) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text("already exists")
 
-    lock_dir = downloads / ".lock_dir"
-    with patch("downloads_agent.executor.LOCK_DIR", lock_dir), \
-         patch("downloads_agent.executor.LOCK_FILE", lock_dir / "lock"), \
-         patch("downloads_agent.executor.LOG_DIR", lock_dir / "logs"):
+    p1, p2, p3 = _patch_executor(downloads)
+    with p1, p2, p3:
         result = execute(plan)
 
     assert result.moved == 1

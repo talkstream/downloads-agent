@@ -11,7 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from downloads_agent import __version__
-from downloads_agent.planner import MovePlan, _resolve_collision
+from downloads_agent.errors import LockError
+from downloads_agent.planner import MovePlan, resolve_collision
 
 LOCK_DIR = Path.home() / ".downloads-agent"
 LOCK_FILE = LOCK_DIR / "lock"
@@ -28,26 +29,33 @@ class ExecutionResult:
 
 def acquire_lock() -> None:
     """Create a lockfile atomically via O_CREAT | O_EXCL."""
-    LOCK_DIR.mkdir(parents=True, exist_ok=True)
-    try:
-        fd = os.open(str(LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        os.write(fd, str(os.getpid()).encode())
-        os.close(fd)
-    except FileExistsError:
+    for _attempt in range(2):
+        LOCK_DIR.mkdir(parents=True, exist_ok=True)
         try:
-            pid = int(LOCK_FILE.read_text().strip())
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            # Process is dead — stale lockfile
-            LOCK_FILE.unlink(missing_ok=True)
-            return acquire_lock()
-        except (ValueError, PermissionError):
-            # ValueError: corrupt lockfile; PermissionError: process alive, different user
-            pass
-        raise RuntimeError(
-            f"Another downloads-agent is running (lockfile {LOCK_FILE}). "
-            f"Remove it manually if this is stale."
-        )
+            fd = os.open(str(LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.write(fd, str(os.getpid()).encode())
+            os.close(fd)
+            return
+        except FileExistsError:
+            try:
+                pid = int(LOCK_FILE.read_text().strip())
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                # Stale lockfile — remove and retry
+                LOCK_FILE.unlink(missing_ok=True)
+                continue
+            except (ValueError, PermissionError):
+                pass
+            # Process alive or lockfile unreadable — fail immediately
+            raise LockError(
+                f"Another downloads-agent is running (lockfile {LOCK_FILE}). "
+                f"Remove it manually if this is stale."
+            )
+    # Stale lock could not be cleared after retries
+    raise LockError(
+        f"Another downloads-agent is running (lockfile {LOCK_FILE}). "
+        f"Remove it manually if this is stale."
+    )
 
 
 def release_lock() -> None:
@@ -81,11 +89,20 @@ def execute(plan: MovePlan) -> ExecutionResult:
                     log_entries.append(entry)
                     continue
 
+                # TOCTOU symlink hardening: verify resolved path is within source's parent
+                resolved = op.source.resolve()
+                source_parent = op.source.parent.resolve()
+                if not str(resolved).startswith(str(source_parent) + "/") and resolved != source_parent:
+                    entry["status"] = "skipped"
+                    entry["error"] = "resolved path outside downloads directory"
+                    log_entries.append(entry)
+                    continue
+
                 # Re-check collision at execution time
                 dest = op.destination
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 if dest.exists():
-                    dest = _resolve_collision(dest)
+                    dest = resolve_collision(dest)
                     entry["destination"] = str(dest)
 
                 # Move

@@ -3,12 +3,23 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 from downloads_agent import __version__
 from downloads_agent.config import load_config
+from downloads_agent.errors import DownloadsAgentError
 from downloads_agent.planner import format_size
+
+
+def _error(msg: str, hint: str | None = None) -> NoReturn:
+    """Print error to stderr and exit with code 1."""
+    print(f"error: {msg}", file=sys.stderr)
+    if hint:
+        print(f"hint: {hint}", file=sys.stderr)
+    sys.exit(1)
 
 
 def _cmd_scan(args: argparse.Namespace) -> None:
@@ -17,8 +28,7 @@ def _cmd_scan(args: argparse.Namespace) -> None:
     downloads = config.downloads_dir
 
     if not downloads.exists():
-        print(f"Directory not found: {downloads}")
-        sys.exit(1)
+        _error(f"directory not found: {downloads}")
 
     from downloads_agent.scanner import scan, should_ignore, _get_dir_size
     from downloads_agent.classifier import classify
@@ -48,6 +58,31 @@ def _cmd_scan(args: argparse.Namespace) -> None:
     inactive_dirs = [f for f in inactive if f.is_dir]
     inactive_size = sum(f.size for f in inactive)
 
+    # Category breakdown
+    cat_counts: dict[str, int] = {}
+    cat_sizes: dict[str, int] = {}
+    for item in inactive:
+        cat = classify(item.extension, item.is_dir, config)
+        cat_counts[cat] = cat_counts.get(cat, 0) + 1
+        cat_sizes[cat] = cat_sizes.get(cat, 0) + item.size
+
+    if args.json:
+        data = {
+            "downloads_dir": str(downloads),
+            "total_files": total_files,
+            "total_dirs": total_dirs,
+            "total_size": total_size,
+            "inactive_files": len(inactive_files),
+            "inactive_dirs": len(inactive_dirs),
+            "inactive_size": inactive_size,
+            "categories": {
+                cat: {"count": cat_counts[cat], "size": cat_sizes[cat]}
+                for cat in sorted(cat_counts, key=lambda c: cat_sizes[c], reverse=True)
+            },
+        }
+        print(json.dumps(data, indent=2))
+        return
+
     print(f"Downloads: {downloads}")
     print(f"  Total: {total_files} files, {total_dirs} dirs (~{format_size(total_size)})")
     print(f"  Inactive (>{config.inactive_days} days): "
@@ -56,14 +91,6 @@ def _cmd_scan(args: argparse.Namespace) -> None:
     print()
 
     if inactive:
-        # Category breakdown
-        cat_counts: dict[str, int] = {}
-        cat_sizes: dict[str, int] = {}
-        for item in inactive:
-            cat = classify(item.extension, item.is_dir, config)
-            cat_counts[cat] = cat_counts.get(cat, 0) + 1
-            cat_sizes[cat] = cat_sizes.get(cat, 0) + item.size
-
         print("  By category:")
         for cat in sorted(cat_counts, key=lambda c: cat_sizes[c], reverse=True):
             print(f"    {cat + ':':<16s} {cat_counts[cat]:>5d} items  (~{format_size(cat_sizes[cat])})")
@@ -82,6 +109,9 @@ def _cmd_run(args: argparse.Namespace) -> None:
     items = scan(config)
     if not items:
         msg = "Nothing to archive — all files are active."
+        if args.json:
+            print(json.dumps({"operations": [], "total_files": 0, "total_dirs": 0, "total_size": 0}))
+            return
         if not args.quiet:
             print(msg)
         if not args.no_notify:
@@ -92,6 +122,19 @@ def _cmd_run(args: argparse.Namespace) -> None:
 
     if not args.execute:
         # Dry-run
+        if args.json:
+            data = {
+                "operations": [
+                    {"source": str(op.source), "destination": str(op.destination),
+                     "size": op.size, "is_dir": op.is_dir}
+                    for op in plan.operations
+                ],
+                "total_files": plan.total_files,
+                "total_dirs": plan.total_dirs,
+                "total_size": plan.total_size,
+            }
+            print(json.dumps(data, indent=2))
+            return
         if not args.quiet:
             print(format_plan(plan))
         if not args.no_notify:
@@ -129,16 +172,15 @@ def _cmd_undo(args: argparse.Namespace) -> None:
 
     try:
         result = undo(args.run_id, archive_dir=config.archive_dir)
-    except (FileNotFoundError, ValueError) as e:
-        print(str(e))
-        sys.exit(1)
+    except DownloadsAgentError as e:
+        _error(str(e))
 
-    print(f"Undo {result['log_file']}:")
-    print(f"  Restored: {result['restored']}")
-    print(f"  Failed: {result['failed']}")
-    print(f"  Skipped: {result['skipped']}")
+    print(f"Undo {result.log_file}:")
+    print(f"  Restored: {result.restored}")
+    print(f"  Failed: {result.failed}")
+    print(f"  Skipped: {result.skipped}")
 
-    if result["failed"]:
+    if result.failed:
         sys.exit(1)
 
 
@@ -187,11 +229,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         prog="downloads-agent",
         description="Automated Downloads organizer for macOS",
+        epilog=(
+            "Typical workflow:\n"
+            "  downloads-agent scan              # see what's inactive\n"
+            "  downloads-agent run               # preview what would be archived\n"
+            "  downloads-agent run --execute     # actually archive files\n"
+            "  downloads-agent undo              # undo the last run"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--config", type=Path, default=None, help="Path to config file")
     parser.add_argument("--quiet", action="store_true", help="Errors only")
     parser.add_argument("--no-notify", action="store_true", help="Disable macOS notifications")
+    parser.add_argument("--json", action="store_true", help="JSON output (scan, run dry-run)")
 
     subparsers = parser.add_subparsers(dest="command")
 
@@ -227,4 +278,7 @@ def main() -> None:
         "status": _cmd_status,
         "config": _cmd_config,
     }
-    commands[args.command](args)
+    try:
+        commands[args.command](args)
+    except DownloadsAgentError as e:
+        _error(str(e))

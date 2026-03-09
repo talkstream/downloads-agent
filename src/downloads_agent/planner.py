@@ -7,6 +7,7 @@ from pathlib import Path
 
 from downloads_agent.classifier import classify
 from downloads_agent.config import Config
+from downloads_agent.errors import DownloadsAgentError
 from downloads_agent.scanner import FileInfo
 
 
@@ -38,7 +39,7 @@ class MovePlan:
     total_size: int
 
 
-def _resolve_collision(target: Path) -> Path:
+def resolve_collision(target: Path) -> Path:
     """Add _1, _2 suffix to avoid overwriting existing files."""
     if not target.exists():
         return target
@@ -87,7 +88,7 @@ def build_plan(items: list[FileInfo], config: Config, check_max: bool = False) -
             else:
                 target = config.archive_dir / category / item.name
 
-        target = _resolve_collision(target)
+        target = resolve_collision(target)
 
         operations.append(MoveOperation(
             source=item.path,
@@ -114,7 +115,7 @@ def build_plan(items: list[FileInfo], config: Config, check_max: bool = False) -
             summary.date_sizes[date_key] = summary.date_sizes.get(date_key, 0) + item.size
 
     if check_max and len(operations) > config.max_operations:
-        raise ValueError(
+        raise DownloadsAgentError(
             f"Plan has {len(operations)} operations, exceeding max_operations={config.max_operations}. "
             f"Increase max_operations in config or reduce inactive_days."
         )
