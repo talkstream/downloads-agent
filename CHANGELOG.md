@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+- `RuntimeError` → `LockError` in `acquire_lock()` — CLI now shows clean error instead of traceback
+
+### Changed
+- Simplified `acquire_lock()` flow: removed `for/else/break` pattern, direct `raise LockError`
+- Added `logger.warning()` in undo bare `except` for failure diagnostics
+- Fixed stale docstring in `undo()`: "dict" → "UndoResult"
+- Replaced `getattr(args, "json", False)` → `args.json` in CLI (global flag, always present)
+- Extracted `_patch_executor()` test helper (DRY, mirrors `_patch_undo()`)
+- Module-level `_DEFAULT_CONFIG` in test_classifier (avoids 97× YAML reload)
+
 ## [0.1.0] - 2026-03-10
 
 ### Added
