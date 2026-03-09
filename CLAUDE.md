@@ -22,6 +22,9 @@ Pipeline: `scan → classify → plan → execute → undo`
 - All tests use `tmp_path` fixtures — never touch real filesystem
 - Spotlight calls mocked: `patch("downloads_agent.scanner._get_spotlight_last_used", return_value=None)`
 - Lock/log dirs patched per test to avoid interference
+- `_patch_executor(tmp_path)` helper in test_executor.py — patches LOCK_DIR/LOCK_FILE/LOG_DIR
+- `_patch_undo(tmp_path)` helper in test_undo.py — patches LOG_DIR and lock paths
+- `_DEFAULT_CONFIG` module-level in test_classifier.py — avoids YAML reload per parameterized test
 - `conftest.py` provides `default_config`, `populated_downloads`, `make_file_info` helpers
 - Run: `pytest tests/ -v`
 
