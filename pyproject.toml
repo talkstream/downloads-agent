@@ -56,6 +56,7 @@ addopts = "-v --cov=downloads_agent --cov-fail-under=75"
 
 [tool.coverage.run]
 source = ["downloads_agent"]
+disable_warnings = ["module-not-measured"]
 
 [tool.coverage.report]
 exclude_lines = [
