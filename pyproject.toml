@@ -54,6 +54,15 @@ testpaths = ["tests"]
 pythonpath = ["tests"]
 addopts = "-v --cov=downloads_agent --cov-fail-under=75"
 
+[tool.coverage.run]
+source = ["downloads_agent"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.",
+]
+
 [tool.mypy]
 check_untyped_defs = true
 disallow_untyped_defs = true
