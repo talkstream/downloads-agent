@@ -1,4 +1,19 @@
-"""Execute move operations with transaction logging and lockfile."""
+"""Execute move operations with atomic lockfile and transaction logging.
+
+Pipeline stage 4. Takes a ``MovePlan`` and performs the actual file moves
+via ``shutil.move``, guarded by a mutual-exclusion lockfile and producing
+a JSON transaction log that enables ``undo``.
+
+Security & reliability measures:
+- **Atomic lock**: ``O_CREAT | O_EXCL`` ensures only one instance runs
+  at a time, with stale-lock detection via PID liveness check.
+- **TOCTOU symlink hardening**: each source is verified to not be (or
+  resolve through) a symlink pointing outside the downloads directory.
+- **Runtime collision re-check**: destinations are re-checked at move time
+  to handle files created between planning and execution.
+- **Atomic log write**: transaction log is written to a temp file then
+  renamed via ``os.replace`` so a crash never produces a partial log.
+"""
 
 from __future__ import annotations
 
@@ -21,6 +36,16 @@ LOG_DIR = LOCK_DIR / "logs"
 
 @dataclass
 class ExecutionResult:
+    """Summary of a completed execution run.
+
+    Attributes:
+        moved: Number of items successfully moved.
+        failed: Number of items that raised an ``OSError`` during move.
+        skipped: Number of items skipped (symlinks, TOCTOU failures).
+        total_size: Cumulative size in bytes of successfully moved items.
+        log_path: Absolute path to the JSON transaction log for this run.
+    """
+
     moved: int
     failed: int
     skipped: int
@@ -29,10 +54,22 @@ class ExecutionResult:
 
 
 def acquire_lock() -> None:
-    """Create a lockfile atomically via O_CREAT | O_EXCL."""
+    """Create a lockfile atomically via ``O_CREAT | O_EXCL``.
+
+    The lock file contains the owning process's PID. If the file already
+    exists, the PID is read and checked for liveness via ``os.kill(pid, 0)``.
+    A stale lock (dead PID) is removed and retried once. This two-attempt
+    loop handles the common case of a previous crash leaving a stale lock.
+
+    Raises:
+        LockError: If another live process holds the lock, or the lockfile
+            is unreadable (invalid PID, permission denied).
+    """
     for _attempt in range(2):
         LOCK_DIR.mkdir(parents=True, exist_ok=True)
         try:
+            # O_CREAT | O_EXCL: atomically create-or-fail — the kernel
+            # guarantees no race between existence check and creation.
             fd = os.open(str(LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             try:
                 os.write(fd, str(os.getpid()).encode())
@@ -75,7 +112,23 @@ def release_lock() -> None:
 
 
 def execute(plan: MovePlan) -> ExecutionResult:
-    """Execute all move operations and write transaction log."""
+    """Execute all planned moves under a lockfile, producing a transaction log.
+
+    For each operation: skips symlinks and items whose resolved path escapes
+    the downloads directory (TOCTOU hardening), re-checks collisions at move
+    time, then performs ``shutil.move``. Every outcome (ok/skipped/error) is
+    recorded in the transaction log for later ``undo``.
+
+    The transaction log is written atomically: data goes to a temp file first,
+    then ``os.replace`` swaps it into place. A crash during write leaves no
+    partial log — the temp file is cleaned up in the ``except`` handler.
+
+    Args:
+        plan: A ``MovePlan`` from ``build_plan()``.
+
+    Returns:
+        An ``ExecutionResult`` summarizing moved/failed/skipped counts.
+    """
     acquire_lock()
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -102,7 +155,9 @@ def execute(plan: MovePlan) -> ExecutionResult:
                     log_entries.append(entry)
                     continue
 
-                # TOCTOU symlink hardening: verify resolved path is within source's parent
+                # TOCTOU symlink hardening: between scan and execute, a file could
+                # be replaced by a symlink pointing outside ~/Downloads. Resolve
+                # the real path and verify it's still within the expected parent.
                 resolved = op.source.resolve()
                 source_parent = op.source.parent.resolve()
                 if not str(resolved).startswith(str(source_parent) + "/") and resolved != source_parent:
@@ -130,7 +185,8 @@ def execute(plan: MovePlan) -> ExecutionResult:
                 failed += 1
             log_entries.append(entry)
 
-        # Write transaction log atomically
+        # Atomic log write: write to a temp file, then os.replace() into the
+        # final path. This ensures a crash never produces a half-written log.
         log_name = timestamp.strftime("%Y-%m-%d_%H%M%S") + ".json"
         log_path = LOG_DIR / log_name
         log_data = {

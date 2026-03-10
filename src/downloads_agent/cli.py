@@ -1,4 +1,15 @@
-"""Command-line interface for downloads-agent."""
+"""Command-line interface for downloads-agent.
+
+Provides an argparse-based CLI with seven subcommands: ``scan``, ``run``,
+``undo``, ``install``, ``uninstall``, ``status``, and ``config``. Commands
+are dispatched via a simple dict mapping, and pipeline modules are imported
+lazily within each handler to keep startup fast and import errors localized.
+
+Global flags (``--config``, ``--quiet``, ``--no-notify``, ``--json``) are
+available to all subcommands. All ``DownloadsAgentError`` exceptions are
+caught at the top level and converted to user-friendly stderr messages
+with exit code 1.
+"""
 
 from __future__ import annotations
 
@@ -23,7 +34,9 @@ def _error(msg: str, hint: str | None = None) -> NoReturn:
 
 
 def _cmd_scan(args: argparse.Namespace) -> None:
-    """Show current state of Downloads directory."""
+    """Display a summary of the Downloads directory: total/inactive counts,
+    sizes, and per-category breakdown. Supports ``--json`` for machine-readable output.
+    """
     config = load_config(args.config)
     downloads = config.downloads_dir
 
@@ -102,7 +115,11 @@ def _cmd_scan(args: argparse.Namespace) -> None:
 
 
 def _cmd_run(args: argparse.Namespace) -> None:
-    """Run organizer (dry-run by default, --execute for real)."""
+    """Run the archive pipeline: scan → classify → plan → (optionally) execute.
+
+    Without ``--execute``, prints a dry-run preview. With ``--execute``,
+    moves files and writes a transaction log. Supports ``--json`` output.
+    """
     config = load_config(args.config)
 
     from downloads_agent.scanner import scan
@@ -176,7 +193,10 @@ def _cmd_run(args: argparse.Namespace) -> None:
 
 
 def _cmd_undo(args: argparse.Namespace) -> None:
-    """Undo a previous run."""
+    """Reverse a previous run by replaying its transaction log backward.
+
+    Accepts an optional ``run_id``; defaults to the most recent log.
+    """
     from downloads_agent.undo import undo
 
     config = load_config(args.config)
@@ -196,7 +216,7 @@ def _cmd_undo(args: argparse.Namespace) -> None:
 
 
 def _cmd_install(args: argparse.Namespace) -> None:
-    """Install cron job."""
+    """Install (or replace) the weekly cron job for automatic archiving."""
     from downloads_agent.scheduler import install
 
     cron_line = install()
@@ -204,7 +224,7 @@ def _cmd_install(args: argparse.Namespace) -> None:
 
 
 def _cmd_uninstall(args: argparse.Namespace) -> None:
-    """Remove cron job."""
+    """Remove the downloads-agent cron job if installed."""
     from downloads_agent.scheduler import uninstall
 
     if uninstall():
@@ -214,7 +234,7 @@ def _cmd_uninstall(args: argparse.Namespace) -> None:
 
 
 def _cmd_status(args: argparse.Namespace) -> None:
-    """Show scheduler status."""
+    """Display cron installation state, schedule, and last run timestamp."""
     from downloads_agent.scheduler import get_status
 
     status = get_status()
@@ -224,7 +244,7 @@ def _cmd_status(args: argparse.Namespace) -> None:
 
 
 def _cmd_config(args: argparse.Namespace) -> None:
-    """Show current configuration."""
+    """Dump the effective configuration (defaults merged with user overrides) as YAML."""
     import yaml
     from dataclasses import asdict
 
@@ -237,6 +257,11 @@ def _cmd_config(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    """Entry point for the ``downloads-agent`` console script.
+
+    Parses CLI arguments, dispatches to the appropriate command handler,
+    and catches domain exceptions for clean error reporting.
+    """
     parser = argparse.ArgumentParser(
         prog="downloads-agent",
         description="Automated Downloads organizer for macOS",

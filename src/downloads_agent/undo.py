@@ -1,4 +1,13 @@
-"""Rollback operations from transaction logs."""
+"""Reverse previous archive operations using transaction logs.
+
+Pipeline stage 5 (rollback). Reads a JSON transaction log produced by
+``executor.execute()``, reverses every successful move (destination → source),
+and cleans up empty directories left behind. Operations are replayed in
+reverse order to correctly handle nested directory structures.
+
+Run IDs are validated via regex to prevent path traversal attacks
+(e.g. ``../../../etc/passwd``).
+"""
 
 from __future__ import annotations
 
@@ -14,6 +23,15 @@ from downloads_agent.errors import DownloadsAgentError
 
 @dataclass
 class UndoResult:
+    """Summary of an undo operation.
+
+    Attributes:
+        log_file: Filename (not path) of the transaction log that was undone.
+        restored: Number of items successfully moved back to their original location.
+        failed: Number of items that could not be restored (``OSError``).
+        skipped: Number of entries skipped (non-"ok" status, or source missing).
+    """
+
     log_file: str
     restored: int
     failed: int
@@ -23,7 +41,11 @@ LOG_DIR = Path.home() / ".downloads-agent" / "logs"
 
 
 def list_runs() -> list[Path]:
-    """List available transaction logs, most recent first."""
+    """List available transaction logs, most recent first.
+
+    Returns paths sorted in reverse chronological order (newest first).
+    Excludes non-transaction files like ``cron.log``.
+    """
     if not LOG_DIR.exists():
         return []
     logs = sorted(LOG_DIR.glob("*.json"), reverse=True)
@@ -32,18 +54,35 @@ def list_runs() -> list[Path]:
 
 
 def undo(run_id: str | None = None, archive_dir: Path | None = None) -> UndoResult:
-    """Undo a specific run or the latest one.
+    """Reverse a previous execution by replaying its transaction log backward.
+
+    Locates the transaction log (by *run_id* or most recent), validates the
+    run ID format via regex to prevent path traversal, then moves each
+    successfully archived item back to its original location. Operations are
+    replayed in reverse order so nested directory structures are restored
+    correctly (children before parents). Empty archive directories left
+    behind are cleaned up, stopping at *archive_dir*.
 
     Args:
-        run_id: Transaction log ID (YYYY-MM-DD_HHMMSS format).
-        archive_dir: Root archive directory (used as ceiling for empty dir cleanup).
+        run_id: Transaction log stem in ``YYYY-MM-DD_HHMMSS`` format.
+            Must match a strict regex to prevent path traversal attacks
+            (e.g. ``../../etc/passwd``). Defaults to the most recent log.
+        archive_dir: Root archive directory used as the ceiling for empty
+            directory cleanup — this directory itself is never removed.
 
-    Returns an UndoResult with restored/failed/skipped counts.
+    Returns:
+        An ``UndoResult`` with restored/failed/skipped counts.
+
+    Raises:
+        DownloadsAgentError: If *run_id* format is invalid, the log file
+            does not exist, the log is corrupt JSON, or missing the
+            ``operations`` key.
     """
     from downloads_agent.executor import acquire_lock, release_lock
 
     if run_id:
-        # Sanitize: only allow YYYY-MM-DD_HHMMSS format
+        # Strict format validation prevents path traversal via run_id
+        # (e.g. "../../etc/passwd" would be rejected by the regex).
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{6}", run_id):
             raise DownloadsAgentError(f"Invalid run ID format: {run_id}")
         log_path = LOG_DIR / f"{run_id}.json"

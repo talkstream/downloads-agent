@@ -1,4 +1,16 @@
-"""Build move plan with collision handling and summary."""
+"""Build a move plan with collision handling and human-readable summary.
+
+Pipeline stage 3. Consumes ``FileInfo`` items from the scanner, classifies
+each one, computes destination paths with date-based subdirectories, and
+resolves filename collisions — all without touching the filesystem. The
+resulting ``MovePlan`` can be displayed as a dry-run preview or passed to
+the executor for actual file moves.
+
+Separating planning from execution enables the "dry-run by default"
+philosophy: users always see what *would* happen before committing.
+The ``check_max`` guard is intentionally deferred to execution time so
+dry-run output is never artificially truncated.
+"""
 
 from __future__ import annotations
 
@@ -13,6 +25,8 @@ from downloads_agent.scanner import FileInfo
 
 @dataclass
 class MoveOperation:
+    """A single planned file or directory move."""
+
     source: Path
     destination: Path
     size: int
@@ -21,6 +35,12 @@ class MoveOperation:
 
 @dataclass
 class CategorySummary:
+    """Aggregated statistics for one file category (e.g. Documents, Images).
+
+    Used by ``format_plan()`` to render the dry-run preview with per-category
+    counts, sizes, and date-bucket breakdowns.
+    """
+
     name: str
     count: int = 0
     total_size: int = 0
@@ -31,6 +51,12 @@ class CategorySummary:
 
 @dataclass
 class MovePlan:
+    """Complete move plan with operations and summary statistics.
+
+    Produced by ``build_plan()``, consumed by ``executor.execute()``
+    (for actual moves) or ``format_plan()`` (for dry-run display).
+    """
+
     operations: list[MoveOperation]
     file_summaries: dict[str, CategorySummary]
     folder_summary: CategorySummary | None
@@ -43,7 +69,15 @@ _MAX_COLLISION_ATTEMPTS = 10_000
 
 
 def resolve_collision(target: Path) -> Path:
-    """Add _1, _2 suffix to avoid overwriting existing files."""
+    """Return *target* if it doesn't exist, or append ``_1``, ``_2``, … suffix.
+
+    The suffix is inserted before the file extension (``report_1.pdf``) and
+    is bounded at 10,000 attempts to prevent infinite loops on pathological
+    filesystems. Never overwrites an existing file.
+
+    Raises:
+        DownloadsAgentError: If all 10,000 candidate names are taken.
+    """
     if not target.exists():
         return target
     stem = target.stem
@@ -74,8 +108,24 @@ def format_size(size_bytes: int) -> str:
 def build_plan(items: list[FileInfo], config: Config, check_max: bool = False) -> MovePlan:
     """Build a move plan from scanned items.
 
+    Classifies each item, computes its destination path (with optional
+    YYYY-MM date subfolder), and resolves any filename collisions at
+    plan time. Collisions are re-checked at execution time to handle
+    files created between planning and execution.
+
     Args:
-        check_max: If True, raise DownloadsAgentError when exceeding max_operations.
+        items: ``FileInfo`` list from ``scan()``.
+        config: Validated application configuration.
+        check_max: If ``True``, raise ``DownloadsAgentError`` when the plan
+            exceeds ``max_operations``. Intentionally ``False`` for dry-runs
+            so users can see the full scope before deciding.
+
+    Returns:
+        A ``MovePlan`` with operations and per-category summaries.
+
+    Raises:
+        DownloadsAgentError: When *check_max* is ``True`` and the plan
+            exceeds ``config.max_operations``.
     """
     operations: list[MoveOperation] = []
     file_summaries: dict[str, CategorySummary] = {}
@@ -119,6 +169,8 @@ def build_plan(items: list[FileInfo], config: Config, check_max: bool = False) -
             summary.date_buckets[date_key] = summary.date_buckets.get(date_key, 0) + 1
             summary.date_sizes[date_key] = summary.date_sizes.get(date_key, 0) + item.size
 
+    # Safety cap checked only when executing (check_max=True) so dry-runs
+    # always show the full plan regardless of max_operations.
     if check_max and len(operations) > config.max_operations:
         raise DownloadsAgentError(
             f"Plan has {len(operations)} operations, exceeding max_operations={config.max_operations}. "
@@ -140,7 +192,12 @@ def build_plan(items: list[FileInfo], config: Config, check_max: bool = False) -
 
 
 def format_plan(plan: MovePlan) -> str:
-    """Format a move plan for dry-run display."""
+    """Format a move plan as a human-readable dry-run preview.
+
+    Categories are sorted by total size (largest first), date buckets
+    within each category are sorted chronologically, and directories
+    are listed by size (top 10 shown). Ends with a total summary line.
+    """
     from datetime import datetime  # noqa: F811 — scoped import for clarity
 
     lines: list[str] = []

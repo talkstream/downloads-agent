@@ -1,4 +1,14 @@
-"""Configuration loading with YAML defaults and user overrides."""
+"""Configuration loading with YAML defaults and user overrides.
+
+Implements a two-layer config strategy: a bundled ``default.yaml`` (shipped
+via ``importlib.resources``) provides sensible defaults, while an optional
+user file at ``~/.downloads-agent/config.yaml`` overrides individual values
+through recursive deep-merge. This lets users change one setting without
+re-specifying the entire config.
+
+Validation is performed eagerly in ``Config.__post_init__`` so invalid
+configurations fail fast at load time rather than mid-execution.
+"""
 
 from __future__ import annotations
 
@@ -27,6 +37,23 @@ _KNOWN_CONFIG_KEYS = frozenset({
 
 @dataclass
 class Config:
+    """Validated application configuration.
+
+    All fields are populated by ``load_config()`` from merged YAML sources.
+    Validation runs in ``__post_init__``, so constructing a ``Config`` with
+    invalid values raises ``ConfigError`` immediately.
+
+    Attributes:
+        downloads_dir: Absolute path to the monitored directory (default ~/Downloads).
+        archive_dir: Absolute path to the archive root (default ~/Downloads/Archive).
+        inactive_days: Minimum days since last use before a file is considered inactive.
+        max_operations: Safety cap on moves per run (enforced only on ``--execute``).
+        date_subfolder: Whether to create YYYY-MM subdirectories within categories.
+        categories: Mapping of category name → list of file extensions (lowercase, no dot).
+        ignore_names: Filenames to skip during scanning (e.g. ``.DS_Store``).
+        ignore_dirs: Directory names to skip during scanning (e.g. ``Archive``).
+    """
+
     downloads_dir: Path
     archive_dir: Path
     inactive_days: int
@@ -37,6 +64,12 @@ class Config:
     ignore_dirs: list[str]
 
     def __post_init__(self) -> None:
+        """Validate field types, ranges, and cross-field invariants.
+
+        Raises:
+            ConfigError: On type mismatch, out-of-range value, path conflict,
+                empty categories, or archive-inside-downloads without ignore.
+        """
         if not isinstance(self.inactive_days, int):
             raise ConfigError(
                 f"inactive_days must be an integer, got {type(self.inactive_days).__name__}"
@@ -63,7 +96,10 @@ class Config:
             )
         if not self.categories:
             raise ConfigError("categories must not be empty")
-        # If archive_dir is inside downloads_dir, its name must be in ignore_dirs
+        # Guard against archiving the archive itself: if archive_dir is a
+        # subdirectory of downloads_dir, its top-level folder must be excluded
+        # from scanning via ignore_dirs. Without this, the scanner would treat
+        # archived files as new candidates and re-archive them indefinitely.
         try:
             archive_rel = self.archive_dir.resolve().relative_to(
                 self.downloads_dir.resolve()
@@ -81,10 +117,12 @@ class Config:
 
 
 def _expand_path(p: str) -> Path:
+    """Expand ``~`` and resolve to an absolute path."""
     return Path(p).expanduser().resolve()
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
+    """Load a YAML file, wrapping parse/IO errors into ``ConfigError``."""
     try:
         with open(path) as f:
             return yaml.safe_load(f) or {}
@@ -95,7 +133,13 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
-    """Merge override into base. Override values win; dicts are merged recursively."""
+    """Recursively merge *override* into *base*; override values win.
+
+    Nested dicts are merged key-by-key so that a user config like
+    ``{"categories": {"Custom": ["xyz"]}}`` adds a category without
+    erasing the built-in ones. Non-dict values (lists, scalars) are
+    replaced wholesale.
+    """
     result = base.copy()
     for key, value in override.items():
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):
@@ -106,7 +150,24 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 
 def load_config(config_path: Path | None = None) -> Config:
-    """Load config from default.yaml merged with optional user overrides."""
+    """Load config from bundled defaults merged with optional user overrides.
+
+    The merge strategy is: deep-merge user values on top of ``default.yaml``,
+    then construct and validate a ``Config`` dataclass. Unknown keys produce
+    a stderr warning (forward-compatible), and the legacy ``ignore_patterns``
+    key is silently renamed to ``ignore_names`` for backward compatibility.
+
+    Args:
+        config_path: Explicit path to a user config file. Falls back to
+            ``~/.downloads-agent/config.yaml`` if not provided.
+
+    Returns:
+        A fully validated ``Config`` instance.
+
+    Raises:
+        ConfigError: On YAML syntax errors, unreadable files, or validation
+            failures in the resulting ``Config``.
+    """
     with as_file(_DEFAULT_CONFIG_REF) as default_path:
         base = _load_yaml(default_path)
 
