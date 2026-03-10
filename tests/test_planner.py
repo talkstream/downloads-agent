@@ -66,7 +66,7 @@ def test_build_plan_no_date_subfolder(default_config: Config) -> None:
     assert dest == default_config.archive_dir / "Documents" / "doc.pdf"
 
 
-def testresolve_collision(tmp_path: Path) -> None:
+def test_resolve_collision(tmp_path: Path) -> None:
     """Collision resolution should add _1, _2 suffixes."""
     target = tmp_path / "file.pdf"
     assert resolve_collision(target) == target

@@ -203,7 +203,7 @@ def test_undo_with_lockfile(tmp_path: Path) -> None:
 
 
 def test_undo_malformed_json_log(tmp_path: Path) -> None:
-    """Malformed JSON log should raise a clear error, not json.JSONDecodeError."""
+    """Malformed JSON log should raise DownloadsAgentError."""
     log_dir = tmp_path / "logs"
     log_dir.mkdir(parents=True)
     log_path = log_dir / "2026-01-01_090000.json"
@@ -211,12 +211,12 @@ def test_undo_malformed_json_log(tmp_path: Path) -> None:
 
     p1, p2, p3 = _patch_undo(tmp_path)
     with p1, p2, p3:
-        with pytest.raises(Exception):
+        with pytest.raises(DownloadsAgentError, match="corrupt"):
             undo("2026-01-01_090000")
 
 
 def test_undo_missing_operations_key(tmp_path: Path) -> None:
-    """Log without 'operations' key should raise a clear error."""
+    """Log without 'operations' key should raise DownloadsAgentError."""
     log_dir = tmp_path / "logs"
     log_dir.mkdir(parents=True)
     log_path = log_dir / "2026-01-01_090000.json"
@@ -224,7 +224,7 @@ def test_undo_missing_operations_key(tmp_path: Path) -> None:
 
     p1, p2, p3 = _patch_undo(tmp_path)
     with p1, p2, p3:
-        with pytest.raises(Exception):
+        with pytest.raises(DownloadsAgentError, match="missing 'operations'"):
             undo("2026-01-01_090000")
 
 

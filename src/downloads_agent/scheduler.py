@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import shlex
 import shutil
 import subprocess
+import sys
+from dataclasses import dataclass
 from pathlib import Path
+
+from downloads_agent.errors import DownloadsAgentError
 
 CRON_MARKER = "# downloads-agent"
 LOG_PATH = Path.home() / ".downloads-agent" / "logs" / "cron.log"
@@ -15,12 +20,21 @@ def _get_agent_path() -> str:
     path = shutil.which("downloads-agent")
     if path:
         return path
-    # Fallback: run as module
-    return "python3 -m downloads_agent"
+    # Fallback: use the current Python interpreter (not bare 'python3')
+    print(
+        "warning: 'downloads-agent' not found on PATH, "
+        f"using '{sys.executable} -m downloads_agent'",
+        file=sys.stderr,
+    )
+    return f"{sys.executable} -m downloads_agent"
 
 
 def _get_current_crontab() -> str:
-    """Get current crontab content."""
+    """Get current crontab content.
+
+    Returns empty string only when there is genuinely no crontab.
+    Raises DownloadsAgentError on unexpected failures to prevent data loss.
+    """
     try:
         result = subprocess.run(
             ["crontab", "-l"],
@@ -29,9 +43,15 @@ def _get_current_crontab() -> str:
         )
         if result.returncode == 0:
             return result.stdout
-    except OSError:
-        pass
-    return ""
+        # "no crontab for <user>" is the expected empty-crontab case
+        if "no crontab" in result.stderr.lower():
+            return ""
+        raise DownloadsAgentError(
+            f"Failed to read crontab (exit code {result.returncode}): "
+            f"{result.stderr.strip()}"
+        )
+    except OSError as e:
+        raise DownloadsAgentError(f"crontab command not available: {e}") from e
 
 
 def _set_crontab(content: str) -> None:
@@ -52,7 +72,7 @@ def install() -> str:
     lines = [line for line in current.splitlines() if CRON_MARKER not in line]
 
     agent_cmd = _get_agent_path()
-    cron_line = f'0 9 * * 0 {agent_cmd} run --execute --quiet >> "{LOG_PATH}" 2>&1 {CRON_MARKER}'
+    cron_line = f'0 9 * * 0 {shlex.quote(agent_cmd)} run --execute --quiet >> "{LOG_PATH}" 2>&1 {CRON_MARKER}'
     lines.append(cron_line)
 
     # Ensure trailing newline
@@ -83,7 +103,14 @@ def is_installed() -> bool:
     return CRON_MARKER in current
 
 
-def get_status() -> dict:
+@dataclass(frozen=True)
+class SchedulerStatus:
+    installed: bool
+    last_run: str | None
+    schedule: str
+
+
+def get_status() -> SchedulerStatus:
     """Get scheduler status."""
     from downloads_agent.undo import list_runs
 
@@ -91,8 +118,8 @@ def get_status() -> dict:
     runs = list_runs()
     last_run = runs[0].stem if runs else None
 
-    return {
-        "installed": installed,
-        "last_run": last_run,
-        "schedule": "Every Sunday at 09:00" if installed else "Not scheduled",
-    }
+    return SchedulerStatus(
+        installed=installed,
+        last_run=last_run,
+        schedule="Every Sunday at 09:00" if installed else "Not scheduled",
+    )

@@ -23,6 +23,7 @@ LOG_DIR = LOCK_DIR / "logs"
 class ExecutionResult:
     moved: int
     failed: int
+    skipped: int
     total_size: int
     log_path: Path
 
@@ -33,8 +34,10 @@ def acquire_lock() -> None:
         LOCK_DIR.mkdir(parents=True, exist_ok=True)
         try:
             fd = os.open(str(LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            os.write(fd, str(os.getpid()).encode())
-            os.close(fd)
+            try:
+                os.write(fd, str(os.getpid()).encode())
+            finally:
+                os.close(fd)
             return
         except FileExistsError:
             try:
@@ -44,9 +47,17 @@ def acquire_lock() -> None:
                 # Stale lockfile — remove and retry
                 LOCK_FILE.unlink(missing_ok=True)
                 continue
-            except (ValueError, PermissionError):
-                pass
-            # Process alive or lockfile unreadable — fail immediately
+            except ValueError:
+                raise LockError(
+                    f"Lockfile {LOCK_FILE} contains invalid PID. "
+                    f"Remove it manually: rm {LOCK_FILE}"
+                )
+            except PermissionError:
+                raise LockError(
+                    f"Cannot read lockfile {LOCK_FILE} (permission denied). "
+                    f"Check file permissions or remove it manually."
+                )
+            # Process alive — fail immediately
             raise LockError(
                 f"Another downloads-agent is running (lockfile {LOCK_FILE}). "
                 f"Remove it manually if this is stale."
@@ -72,6 +83,7 @@ def execute(plan: MovePlan) -> ExecutionResult:
         log_entries: list[dict] = []
         moved = 0
         failed = 0
+        skipped = 0
         total_size = 0
 
         for op in plan.operations:
@@ -86,6 +98,7 @@ def execute(plan: MovePlan) -> ExecutionResult:
                 # Skip symlinks
                 if op.source.is_symlink():
                     entry["status"] = "skipped"
+                    skipped += 1
                     log_entries.append(entry)
                     continue
 
@@ -95,6 +108,7 @@ def execute(plan: MovePlan) -> ExecutionResult:
                 if not str(resolved).startswith(str(source_parent) + "/") and resolved != source_parent:
                     entry["status"] = "skipped"
                     entry["error"] = "resolved path outside downloads directory"
+                    skipped += 1
                     log_entries.append(entry)
                     continue
 
@@ -110,9 +124,9 @@ def execute(plan: MovePlan) -> ExecutionResult:
                 entry["status"] = "ok"
                 moved += 1
                 total_size += op.size
-            except Exception as e:
+            except OSError as e:
                 entry["status"] = "error"
-                entry["error"] = str(e)
+                entry["error"] = f"{type(e).__name__}: {e}"
                 failed += 1
             log_entries.append(entry)
 
@@ -136,12 +150,16 @@ def execute(plan: MovePlan) -> ExecutionResult:
                 json.dump(log_data, f, indent=2, ensure_ascii=False)
             os.replace(tmp_path, str(log_path))
         except BaseException:
-            os.unlink(tmp_path)
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass  # cleanup failure is secondary to the original error
             raise
 
         return ExecutionResult(
             moved=moved,
             failed=failed,
+            skipped=skipped,
             total_size=total_size,
             log_path=log_path,
         )

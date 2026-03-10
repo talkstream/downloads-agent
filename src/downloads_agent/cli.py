@@ -45,12 +45,15 @@ def _cmd_scan(args: argparse.Namespace) -> None:
         if should_ignore(entry.name, is_dir, config):
             continue
 
-        if is_dir:
-            total_dirs += 1
-            total_size += _get_dir_size(entry)
-        else:
-            total_files += 1
-            total_size += entry.stat().st_size
+        try:
+            if is_dir:
+                total_dirs += 1
+                total_size += _get_dir_size(entry)
+            else:
+                total_files += 1
+                total_size += entry.stat().st_size
+        except OSError:
+            continue  # file disappeared or unreadable
 
     # Scan for inactive items
     inactive = scan(config)
@@ -153,7 +156,15 @@ def _cmd_run(args: argparse.Namespace) -> None:
 
     result = execute(plan)
 
-    if not args.quiet:
+    if args.json:
+        print(json.dumps({
+            "moved": result.moved,
+            "failed": result.failed,
+            "skipped": result.skipped,
+            "total_size": result.total_size,
+            "log_path": str(result.log_path),
+        }))
+    elif not args.quiet:
         print(f"Done: {result.moved} moved, {result.failed} failed")
         print(f"Transaction log: {result.log_path}")
 
@@ -207,9 +218,9 @@ def _cmd_status(args: argparse.Namespace) -> None:
     from downloads_agent.scheduler import get_status
 
     status = get_status()
-    print(f"Schedule: {status['schedule']}")
-    print(f"Installed: {'yes' if status['installed'] else 'no'}")
-    print(f"Last run: {status['last_run'] or 'never'}")
+    print(f"Schedule: {status.schedule}")
+    print(f"Installed: {'yes' if status.installed else 'no'}")
+    print(f"Last run: {status.last_run or 'never'}")
 
 
 def _cmd_config(args: argparse.Namespace) -> None:
@@ -242,7 +253,7 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default=None, help="Path to config file")
     parser.add_argument("--quiet", action="store_true", help="Errors only")
     parser.add_argument("--no-notify", action="store_true", help="Disable macOS notifications")
-    parser.add_argument("--json", action="store_true", help="JSON output (scan, run dry-run)")
+    parser.add_argument("--json", action="store_true", help="JSON output (scan, run)")
 
     subparsers = parser.add_subparsers(dest="command")
 

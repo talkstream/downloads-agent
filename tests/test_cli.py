@@ -65,12 +65,13 @@ def test_cli_run_exit_code_on_failure(default_config: Config, tmp_path: Path) ->
         execute=True,
         quiet=True,
         no_notify=True,
+        json=False,
     )
 
     # Mock scan to return a file, and execute to return a result with failures
     from downloads_agent.executor import ExecutionResult
 
-    mock_result = ExecutionResult(moved=0, failed=1, total_size=0, log_path=tmp_path / "log.json")
+    mock_result = ExecutionResult(moved=0, failed=1, skipped=0, total_size=0, log_path=tmp_path / "log.json")
 
     with patch("downloads_agent.cli.load_config", return_value=default_config), \
          patch("downloads_agent.scanner._get_spotlight_last_used", return_value=None), \

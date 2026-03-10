@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import json
-import logging
 import re
 import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from downloads_agent.errors import DownloadsAgentError
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -57,8 +55,18 @@ def undo(run_id: str | None = None, archive_dir: Path | None = None) -> UndoResu
             raise DownloadsAgentError("No transaction logs found.")
         log_path = runs[0]
 
-    with open(log_path) as f:
-        log_data = json.load(f)
+    try:
+        with open(log_path) as f:
+            log_data = json.load(f)
+    except json.JSONDecodeError as e:
+        raise DownloadsAgentError(
+            f"Transaction log is corrupt: {log_path}: {e}"
+        ) from e
+
+    if "operations" not in log_data:
+        raise DownloadsAgentError(
+            f"Transaction log missing 'operations' key: {log_path}"
+        )
 
     acquire_lock()
     try:
@@ -87,8 +95,11 @@ def undo(run_id: str | None = None, archive_dir: Path | None = None) -> UndoResu
 
                 # Track parent directories for cleanup
                 empty_dirs.add(src.parent)
-            except Exception:
-                logger.warning("Failed to undo %s → %s", src, dst, exc_info=True)
+            except OSError as e:
+                print(
+                    f"warning: failed to undo {src} → {dst}: {e}",
+                    file=sys.stderr,
+                )
                 failed += 1
 
         # Clean up empty directories created by archiving

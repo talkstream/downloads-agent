@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from downloads_agent.config import Config
+
+# Track whether Spotlight unavailability warning was shown
+_spotlight_warned = False
 
 
 @dataclass
@@ -24,6 +28,7 @@ class FileInfo:
 
 def _get_spotlight_last_used(path: Path) -> datetime | None:
     """Get kMDItemLastUsedDate from Spotlight metadata."""
+    global _spotlight_warned
     try:
         result = subprocess.run(
             ["mdls", "-name", "kMDItemLastUsedDate", "-raw", str(path)],
@@ -34,8 +39,16 @@ def _get_spotlight_last_used(path: Path) -> datetime | None:
         raw = result.stdout.strip()
         if raw and raw != "(null)":
             return datetime.strptime(raw, "%Y-%m-%d %H:%M:%S %z")
-    except (subprocess.TimeoutExpired, ValueError, OSError):
+    except (subprocess.TimeoutExpired, ValueError):
         pass
+    except OSError:
+        if not _spotlight_warned:
+            _spotlight_warned = True
+            print(
+                "warning: mdls (Spotlight) is unavailable, "
+                "falling back to mtime for all files",
+                file=sys.stderr,
+            )
     return None
 
 
@@ -85,7 +98,10 @@ def scan(config: Config) -> list[FileInfo]:
             continue
 
         # Get stat once to avoid TOCTOU and double syscall
-        stat_result = entry.stat()
+        try:
+            stat_result = entry.stat()
+        except OSError:
+            continue  # file disappeared between iterdir and stat
 
         # Get last used date
         spotlight_date = _get_spotlight_last_used(entry)

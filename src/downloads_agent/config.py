@@ -37,9 +37,17 @@ class Config:
     ignore_dirs: list[str]
 
     def __post_init__(self) -> None:
+        if not isinstance(self.inactive_days, int):
+            raise ConfigError(
+                f"inactive_days must be an integer, got {type(self.inactive_days).__name__}"
+            )
         if self.inactive_days < 1:
             raise ConfigError(
                 f"inactive_days must be >= 1, got {self.inactive_days}"
+            )
+        if not isinstance(self.max_operations, int):
+            raise ConfigError(
+                f"max_operations must be an integer, got {type(self.max_operations).__name__}"
             )
         if self.max_operations < 1:
             raise ConfigError(
@@ -49,8 +57,27 @@ class Config:
             raise ConfigError(
                 "downloads_dir and archive_dir must be different directories"
             )
+        if not isinstance(self.categories, dict):
+            raise ConfigError(
+                f"categories must be a mapping, got {type(self.categories).__name__}"
+            )
         if not self.categories:
             raise ConfigError("categories must not be empty")
+        # If archive_dir is inside downloads_dir, its name must be in ignore_dirs
+        try:
+            archive_rel = self.archive_dir.resolve().relative_to(
+                self.downloads_dir.resolve()
+            )
+            if archive_rel.parts:
+                top_dir = archive_rel.parts[0]
+                if top_dir not in self.ignore_dirs:
+                    raise ConfigError(
+                        f"archive_dir '{self.archive_dir.name}' is inside downloads_dir "
+                        f"but not in ignore_dirs. Add '{top_dir}' to ignore_dirs to "
+                        f"prevent archiving the archive itself."
+                    )
+        except ValueError:
+            pass  # archive_dir is not inside downloads_dir — fine
 
 
 def _expand_path(p: str) -> Path:
@@ -58,8 +85,13 @@ def _expand_path(p: str) -> Path:
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
-    with open(path) as f:
-        return yaml.safe_load(f) or {}
+    try:
+        with open(path) as f:
+            return yaml.safe_load(f) or {}
+    except yaml.YAMLError as e:
+        raise ConfigError(f"YAML syntax error in {path}: {e}") from e
+    except OSError as e:
+        raise ConfigError(f"Cannot read config file {path}: {e}") from e
 
 
 def _deep_merge(base: dict, override: dict) -> dict:

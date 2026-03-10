@@ -97,7 +97,7 @@ def test_config_negative_inactive_days() -> None:
             date_subfolder=True,
             categories={"Documents": ["pdf"]},
             ignore_names=[],
-            ignore_dirs=[],
+            ignore_dirs=["Archive"],
         )
 
 
@@ -112,7 +112,7 @@ def test_config_zero_max_operations() -> None:
             date_subfolder=True,
             categories={"Documents": ["pdf"]},
             ignore_names=[],
-            ignore_dirs=[],
+            ignore_dirs=["Archive"],
         )
 
 
@@ -142,8 +142,92 @@ def test_config_empty_categories() -> None:
             date_subfolder=True,
             categories={},
             ignore_names=[],
+            ignore_dirs=["Archive"],
+        )
+
+
+def test_config_archive_inside_downloads_without_ignore() -> None:
+    """archive_dir inside downloads_dir must be in ignore_dirs."""
+    with pytest.raises(ConfigError, match="not in ignore_dirs"):
+        Config(
+            downloads_dir=Path("/tmp/dl"),
+            archive_dir=Path("/tmp/dl/Backup"),
+            inactive_days=30,
+            max_operations=500,
+            date_subfolder=True,
+            categories={"Documents": ["pdf"]},
+            ignore_names=[],
             ignore_dirs=[],
         )
+
+
+def test_config_archive_inside_downloads_with_ignore() -> None:
+    """archive_dir inside downloads_dir should pass if in ignore_dirs."""
+    config = Config(
+        downloads_dir=Path("/tmp/dl"),
+        archive_dir=Path("/tmp/dl/Backup"),
+        inactive_days=30,
+        max_operations=500,
+        date_subfolder=True,
+        categories={"Documents": ["pdf"]},
+        ignore_names=[],
+        ignore_dirs=["Backup"],
+    )
+    assert config.archive_dir == Path("/tmp/dl/Backup")
+
+
+def test_config_archive_outside_downloads() -> None:
+    """archive_dir outside downloads_dir should not require ignore_dirs."""
+    config = Config(
+        downloads_dir=Path("/tmp/dl"),
+        archive_dir=Path("/tmp/archive"),
+        inactive_days=30,
+        max_operations=500,
+        date_subfolder=True,
+        categories={"Documents": ["pdf"]},
+        ignore_names=[],
+        ignore_dirs=[],
+    )
+    assert config.archive_dir == Path("/tmp/archive")
+
+
+def test_config_invalid_inactive_days_type() -> None:
+    """String inactive_days should raise ConfigError."""
+    with pytest.raises(ConfigError, match="must be an integer"):
+        Config(
+            downloads_dir=Path("/tmp/dl"),
+            archive_dir=Path("/tmp/archive"),
+            inactive_days="thirty",  # type: ignore[arg-type]
+            max_operations=500,
+            date_subfolder=True,
+            categories={"Documents": ["pdf"]},
+            ignore_names=[],
+            ignore_dirs=[],
+        )
+
+
+def test_config_invalid_categories_type() -> None:
+    """Non-dict categories should raise ConfigError."""
+    with pytest.raises(ConfigError, match="must be a mapping"):
+        Config(
+            downloads_dir=Path("/tmp/dl"),
+            archive_dir=Path("/tmp/archive"),
+            inactive_days=30,
+            max_operations=500,
+            date_subfolder=True,
+            categories=["Documents"],  # type: ignore[arg-type]
+            ignore_names=[],
+            ignore_dirs=[],
+        )
+
+
+def test_load_config_malformed_yaml(tmp_path: Path) -> None:
+    """Malformed YAML should raise ConfigError."""
+    user_config = tmp_path / "config.yaml"
+    user_config.write_text("{ broken yaml: [")
+
+    with pytest.raises(ConfigError, match="YAML syntax error"):
+        load_config(config_path=user_config)
 
 
 def test_config_unknown_key_warning(tmp_path: Path, capsys) -> None:

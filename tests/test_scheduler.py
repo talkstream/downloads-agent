@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import subprocess
 from unittest.mock import patch
 
-from downloads_agent.scheduler import install, uninstall, is_installed, CRON_MARKER
+import pytest
+
+from downloads_agent.errors import DownloadsAgentError
+from downloads_agent.scheduler import install, uninstall, is_installed, CRON_MARKER, _get_current_crontab
 
 
 def test_install_adds_cron_entry() -> None:
@@ -97,3 +101,35 @@ def test_install_redirect_order() -> None:
     assert "2>&1" in result
     # >> should come before 2>&1
     assert result.index(">>") < result.index("2>&1")
+
+
+def test_get_current_crontab_failure_raises() -> None:
+    """_get_current_crontab should raise on unexpected crontab failure."""
+    mock_result = subprocess.CompletedProcess(
+        args=["crontab", "-l"],
+        returncode=1,
+        stdout="",
+        stderr="some unexpected error",
+    )
+    with patch("downloads_agent.scheduler.subprocess.run", return_value=mock_result):
+        with pytest.raises(DownloadsAgentError, match="Failed to read crontab"):
+            _get_current_crontab()
+
+
+def test_get_current_crontab_no_crontab() -> None:
+    """_get_current_crontab should return empty string for 'no crontab' message."""
+    mock_result = subprocess.CompletedProcess(
+        args=["crontab", "-l"],
+        returncode=1,
+        stdout="",
+        stderr="no crontab for user",
+    )
+    with patch("downloads_agent.scheduler.subprocess.run", return_value=mock_result):
+        assert _get_current_crontab() == ""
+
+
+def test_get_current_crontab_oserror_raises() -> None:
+    """_get_current_crontab should raise when crontab binary is missing."""
+    with patch("downloads_agent.scheduler.subprocess.run", side_effect=OSError("not found")):
+        with pytest.raises(DownloadsAgentError, match="crontab command not available"):
+            _get_current_crontab()

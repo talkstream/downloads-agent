@@ -18,17 +18,24 @@ def make_file_info(
     is_dir: bool = False,
     size: int = 1024,
     days_old: int = 60,
+    last_used_days_old: int | None = None,
 ) -> FileInfo:
-    """Shared helper to create FileInfo instances for tests."""
+    """Shared helper to create FileInfo instances for tests.
+
+    Args:
+        last_used_days_old: If provided, sets last_used independently from mod_date.
+            Defaults to same as days_old for backward compatibility.
+    """
     now = datetime.now(timezone.utc)
     mod_date = now - timedelta(days=days_old)
+    last_used = now - timedelta(days=(last_used_days_old if last_used_days_old is not None else days_old))
     return FileInfo(
         path=path,
         name=path.name,
         extension=ext,
         size=size,
         is_dir=is_dir,
-        last_used=mod_date,
+        last_used=last_used,
         modification_date=mod_date,
     )
 

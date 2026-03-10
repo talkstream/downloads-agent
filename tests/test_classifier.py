@@ -77,7 +77,7 @@ def _make_default_config() -> Config:
         date_subfolder=True,
         categories=data["categories"],
         ignore_names=[],
-        ignore_dirs=[],
+        ignore_dirs=["Archive"],
     )
 
 

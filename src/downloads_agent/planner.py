@@ -39,6 +39,9 @@ class MovePlan:
     total_size: int
 
 
+_MAX_COLLISION_ATTEMPTS = 10_000
+
+
 def resolve_collision(target: Path) -> Path:
     """Add _1, _2 suffix to avoid overwriting existing files."""
     if not target.exists():
@@ -46,13 +49,15 @@ def resolve_collision(target: Path) -> Path:
     stem = target.stem
     suffix = target.suffix
     parent = target.parent
-    counter = 1
-    while True:
+    for counter in range(1, _MAX_COLLISION_ATTEMPTS + 1):
         new_name = f"{stem}_{counter}{suffix}"
         candidate = parent / new_name
         if not candidate.exists():
             return candidate
-        counter += 1
+    raise DownloadsAgentError(
+        f"Cannot resolve collision for {target}: "
+        f"exceeded {_MAX_COLLISION_ATTEMPTS} attempts"
+    )
 
 
 def format_size(size_bytes: int) -> str:
@@ -70,7 +75,7 @@ def build_plan(items: list[FileInfo], config: Config, check_max: bool = False) -
     """Build a move plan from scanned items.
 
     Args:
-        check_max: If True, raise ValueError when exceeding max_operations.
+        check_max: If True, raise DownloadsAgentError when exceeding max_operations.
     """
     operations: list[MoveOperation] = []
     file_summaries: dict[str, CategorySummary] = {}
@@ -136,7 +141,7 @@ def build_plan(items: list[FileInfo], config: Config, check_max: bool = False) -
 
 def format_plan(plan: MovePlan) -> str:
     """Format a move plan for dry-run display."""
-    from datetime import datetime
+    from datetime import datetime  # noqa: F811 — scoped import for clarity
 
     lines: list[str] = []
     lines.append(f"downloads-agent dry run — {datetime.now().strftime('%Y-%m-%d')}")
